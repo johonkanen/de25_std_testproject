@@ -74,6 +74,11 @@ else
 fi
 export PATH="${TC_BIN}:${PATH}"
 export CROSS_COMPILE="${CROSS_PREFIX}"
+# toybox (and others) invoke ${CROSS_COMPILE}cc; the ARM GNU toolchain only
+# ships ${CROSS_COMPILE}gcc, so provide a cc alias on PATH.
+mkdir -p "${OUT}/ccshim"
+ln -sf "$(command -v ${CROSS_PREFIX}gcc)" "${OUT}/ccshim/${CROSS_PREFIX}cc"
+export PATH="${OUT}/ccshim:${PATH}"
 echo ">> toolchain: $(command -v ${CROSS_PREFIX}gcc)  ($(${CROSS_PREFIX}gcc -dumpversion))"
 
 # ---- ARM Trusted Firmware ----------------------------------------------
