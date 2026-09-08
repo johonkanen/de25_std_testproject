@@ -19,6 +19,16 @@ c5_pin_model_dump.txt
 serv_req_info.txt
 de25_uart.qsf
 de25_uart.qpf
+de25_soc.qsf
+de25_soc.qpf
+*.qpf.bak
+
+# generated HPS/EMIF IP - keep the .ip source + scripts, drop the trees
+hps/ip/hps_subsys/agilex_hps/
+hps/ip/qsys_top/emif_io96b_hps/
+hps/**/*.qpf
+hps/**/*.qsf
+!hps/hps_ddr4_pins.tcl
 
 # simulation
 sim/work/

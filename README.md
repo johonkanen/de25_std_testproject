@@ -4,10 +4,12 @@ Minimal Quartus Prime Pro build for the **Terasic DE25-Standard**
 (Agilex 5 `A5ED013BB32AE4SCS`), structured like
 [`johonkanen/axc3000_test`](https://github.com/johonkanen/axc3000_test).
 
-Scope: a UART + `fpga_interconnect` register block, running straight off the
-50 MHz board oscillator. No PLL, no DSP, no processors — just enough to
-prove the toolchain, the pins and the serial register interface work on a
-fresh board.
+Scope of the default `de25_uart` build: a UART + `fpga_interconnect`
+register block, running straight off the 50 MHz board oscillator. No PLL,
+no DSP, no processors — just enough to prove the toolchain, the pins and
+the serial register interface work on a fresh board. A second top level,
+`de25_soc`, adds the Agilex 5 HPS with DDR4 / Ethernet / SD-MMC — see
+[SoC variant](#soc-variant--de25_soc) below.
 
 ## Sources
 
@@ -120,6 +122,35 @@ cd sim && ./run.sh
 ```
 
 Expected tail: `==== ALL CHECKS PASSED ====`.
+
+## SoC variant — `de25_soc`
+
+A second top level, `de25_soc_top.v`, adds the **Agilex 5 HPS** alongside
+the unchanged fabric register block:
+
+- `hps_min` (`hps/hps_min.v`, generated) — HPS + HPS-EMIF **DDR4**, with
+  **EMAC0** (gigabit, RGMII + MDIO), **SD/MMC** (4-bit), UART1 console,
+  USB0, I2C1, SPIM0. Every FPGA↔HPS bridge is **disabled** — see
+  [hps/README.md](hps/README.md).
+- `de25_uart_top` — the fabric UART register block, exactly as above, on
+  `GPIO_D[0]/[1]`, independent of the HPS.
+
+```
+python3 hps/disable_bridges.py
+qsys-generate hps/ip/hps_subsys/agilex_hps.ip   --synthesis=VHDL --part=A5ED013BB32AE4SCS
+qsys-generate hps/ip/qsys_top/emif_io96b_hps.ip --synthesis=VHDL --part=A5ED013BB32AE4SCS
+python3 hps/gen_hps_min.py
+quartus_sh  -t build_de25_soc.tcl
+quartus_syn de25_soc          # verified: 0 errors (26.1.1)
+quartus_fit de25_soc         # EMIF fit is long (~30-45 min), not run here
+quartus_sta de25_soc
+quartus_asm de25_soc
+```
+
+Because the bridges are off, `de25_soc` does **not** boot the stock Terasic
+GHRD SD image — it needs its own device tree and U-Boot SPL handoff built
+from this project. The fabric register block still works exactly as in the
+`de25_uart` build.
 
 ## Pinout
 
