@@ -25,28 +25,17 @@
 -- Clocking / baud:
 --   g_clock_divider = 434  ->  50e6 / 434 = 115207 baud (~115200, 0.006% err)
 --
--- Register map reachable over UART (32 bit data, 16 bit address):
---   addr 1 : constant id      0x0000DE25   (read only)
---   addr 2 : git hash                       (read only)
---   addr 3 : loopback register              (read / write)
---   addr 4 : read strobe counter            (read only, ++ on every read of 4)
---   addr 5 : LED register, low 10 bits -> LEDR[8:0] + spare  (read / write)
---   addr 6 : SW[9:0] slide switches         (read only)
---   addr 7 : KEY[3:0] push-buttons, 1 = pressed  (read only)
---   addr 8 : free-running core-clock uptime counter  (read only)
---
--- LEDR[8:0] follow addr-5 bits 8..0; LEDR[9] is a ~1 Hz heartbeat so the
--- board shows life without a terminal attached.
+-- This is a thin wrapper around uart_register_block.vhd (register map,
+-- clocking and reset documented there) - it and de25_soc_top.vhd (which
+-- additionally wires the HPS's lwhps2fpga AXI4 port into the same block)
+-- share one register file instead of keeping two.
 ------------------------------------------------------------------------
 library ieee;
     use ieee.std_logic_1164.all;
-    use ieee.numeric_std.all;
 
 entity de25_uart_top is
     generic (
-        -- core clock (Hz) / baud rate.  50 MHz / 115200 = 434.
         g_clock_divider : natural := 434
-        -- power-on reset length in core-clock cycles (~21 ms at 50 MHz).
         ;g_por_cycles   : natural := 1_048_575
     );
     port (
@@ -61,128 +50,23 @@ entity de25_uart_top is
 end entity de25_uart_top;
 
 architecture rtl of de25_uart_top is
-
-    use work.fpga_interconnect_pkg.all;
-
-    signal core_clock : std_logic;
-
-    -- synchronous, active-high reset: power-on counter + CPU_RESET_n button
-    signal por_counter  : natural range 0 to g_por_cycles := g_por_cycles;
-    signal reset_meta   : std_logic := '1';
-    signal reset_sync   : std_logic := '1';
-    signal system_reset : std_logic := '1';
-
-    signal bus_to_communications   : fpga_interconnect_record := init_fpga_interconnect;
-    signal bus_from_communications : fpga_interconnect_record := init_fpga_interconnect;
-    signal bus_from_top            : fpga_interconnect_record := init_fpga_interconnect;
-
-    signal loopback_register : std_logic_vector(31 downto 0) := (others => '0');
-    signal read_counter      : std_logic_vector(31 downto 0) := (others => '0');
-    signal led_register      : std_logic_vector(31 downto 0) := (others => '0');
-    signal uptime_counter    : unsigned(31 downto 0)         := (others => '0');
-
-    -- ~1 Hz heartbeat: 50 MHz / 2**26 ~= 0.75 Hz toggle
-    signal heartbeat_count : unsigned(25 downto 0) := (others => '0');
-    signal heartbeat       : std_logic := '0';
-
-    -- double-flop the async inputs before they reach the register file
-    signal sw_meta,  sw_sync  : std_logic_vector(9 downto 0) := (others => '0');
-    signal key_meta, key_sync : std_logic_vector(3 downto 0) := (others => '1');
-
 begin
 
-------------------------------------------------------------------------
-    core_clock <= CLOCK0_50;
-
-------------------------------------------------------------------------
-    -- hold reset for ~21 ms after configuration, plus the button
-    reset_synchroniser : process (core_clock) is
-    begin
-        if rising_edge(core_clock) then
-            reset_meta <= not CPU_RESET_n;
-            reset_sync <= reset_meta;
-
-            if por_counter /= 0 then
-                por_counter  <= por_counter - 1;
-                system_reset <= '1';
-            else
-                system_reset <= reset_sync;
-            end if;
-        end if;
-    end process reset_synchroniser;
-
-------------------------------------------------------------------------
-    input_synchroniser : process (core_clock) is
-    begin
-        if rising_edge(core_clock) then
-            sw_meta  <= SW;   sw_sync  <= sw_meta;
-            key_meta <= KEY;  key_sync <= key_meta;
-        end if;
-    end process input_synchroniser;
-
-------------------------------------------------------------------------
-    heartbeat_gen : process (core_clock) is
-    begin
-        if rising_edge(core_clock) then
-            heartbeat_count <= heartbeat_count + 1;
-            if heartbeat_count = 0 then
-                heartbeat <= not heartbeat;
-            end if;
-        end if;
-    end process heartbeat_gen;
-
-    LEDR(8 downto 0) <= led_register(8 downto 0);
-    LEDR(9)          <= heartbeat;
-
-------------------------------------------------------------------------
-    test_registers : process (core_clock) is
-    begin
-        if rising_edge(core_clock) then
-            init_bus(bus_from_top);
-
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top, 1, x"0000DE25");
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top, 2, work.git_hash_pkg.git_hash);
-            connect_data_to_address(bus_from_communications, bus_from_top, 3, loopback_register);
-
-            if data_is_requested_from_address(bus_from_communications, 4) then
-                read_counter <= std_logic_vector(unsigned(read_counter) + 1);
-                write_data_to_address(bus_from_top, 0, read_counter);
-            end if;
-
-            connect_data_to_address(bus_from_communications, bus_from_top, 5, led_register);
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top, 6,
-                std_logic_vector(resize(unsigned(sw_sync), 32)));
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top, 7,
-                std_logic_vector(resize(unsigned(not key_sync), 32)));   -- KEY is active low
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top, 8,
-                std_logic_vector(uptime_counter));
-
-            uptime_counter <= uptime_counter + 1;
-
-            bus_to_communications <= bus_from_top;
-
-            if system_reset = '1' then
-                loopback_register     <= (others => '0');
-                read_counter          <= (others => '0');
-                led_register          <= (others => '0');
-                uptime_counter        <= (others => '0');
-                bus_to_communications <= init_fpga_interconnect;
-            end if;
-        end if;
-    end process test_registers;
-
-------------------------------------------------------------------------
-    u_fpga_communications : entity work.fpga_communications
+    u_registers : entity work.uart_register_block
     generic map (
-        fpga_interconnect_pkg => work.fpga_interconnect_pkg
-        ,g_clock_divider      => g_clock_divider
+        g_clock_divider => g_clock_divider
+        ,g_por_cycles   => g_por_cycles
     )
     port map (
-        clock                    => core_clock
-        ,uart_rx                 => uart_rxd
-        ,uart_tx                 => uart_txd
-        ,bus_to_communications   => bus_to_communications
-        ,bus_from_communications => bus_from_communications
+        core_clock  => CLOCK0_50
+        ,CPU_RESET_n => CPU_RESET_n
+        ,SW          => SW
+        ,KEY         => KEY
+        ,LEDR        => LEDR
+        ,uart_rxd    => uart_rxd
+        ,uart_txd    => uart_txd
+        -- lwhps2fpga (axi_*) ports left unconnected - no HPS in this build,
+        -- every input defaults to idle so the bridge never requests anything.
     );
 
 end rtl;

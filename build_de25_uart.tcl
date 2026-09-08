@@ -80,6 +80,8 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/
 
 # git hash constant (refresh with ./write_githash.sh)
 set_global_assignment -name VHDL_FILE $this_file_path/git_hash_pkg.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/uart_register_block.vhd
 
 # bring-up top level
 set_global_assignment -name VHDL_FILE $this_file_path/de25_uart_top.vhd

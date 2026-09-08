@@ -5,11 +5,13 @@
 # Contents:
 #   * hps_subsystem - Agilex 5 HPS + HPS-EMIF DDR4, EMAC0 / SD-MMC / UART1 /
 #                    I2C1.  H2F / F2SDRAM / F2H(ACE5-Lite) disabled; LWH2F
-#                    and the F2H interrupts stay enabled (unwired for now).
-#                    Platform Designer system: hps/hps_subsystem.qsys +
-#                    hps/ip/hps_subsystem/*.ip.  See hps/README.md.
-#   * de25_uart_top - the fabric UART + fpga_interconnect register block
-#                    (unchanged), on GPIO_D[0]/[1].
+#                    (lightweight bridge) and the F2H interrupts stay
+#                    enabled.  Platform Designer system:
+#                    hps/hps_subsystem.qsys + hps/ip/hps_subsystem/*.ip.
+#                    See hps/README.md.
+#   * uart_register_block - the fpga_interconnect register file, reachable
+#                    over BOTH the fabric UART (GPIO_D[0]/[1]) and the
+#                    HPS's LWH2F, via axi_lwh2f_bridge.vhd.
 #
 # PROJECT_IP_REGENERATION_POLICY ALWAYS_REGENERATE_IP below means
 # quartus_syn regenerates hps_subsystem itself - no manual qsys-generate.
@@ -75,7 +77,8 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_uart/uart_tx/
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/serial_protocol_generic_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/communications.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/git_hash_pkg.vhd
-set_global_assignment -name VHDL_FILE $this_file_path/de25_uart_top.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/uart_register_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/de25_soc_top.vhd
 
 # ---------------------------------------------------------- SoC HDL + IP
