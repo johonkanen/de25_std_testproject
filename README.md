@@ -157,6 +157,16 @@ modelled on Altera's roll-your-own GSRD script) is in
 [`linux/`](linux/README.md). It builds end to end (ATF + U-Boot + kernel +
 toybox initramfs + `sdcard.img`); not yet booted on hardware.
 
+**Talking to the HPS today, with none of that**:
+[`hps/baremetal_uart1_test/`](hps/baremetal_uart1_test/README.md) is a
+from-scratch bare-metal program — no ATF, no U-Boot, no Linux, no SD card
+— that runs straight out of HPS OCRAM and talks over HPS UART1. Loaded the
+same volatile-JTAG way as every other `.sof` here
+(`quartus_pfg -o hps_path=...` + `quartus_pgm`).
+**Hardware-verified**: prints a banner (pin-mux + clock bring-up return
+codes, measured UART clock, programmed baud divisor) and echoes every byte
+sent back, confirmed byte-for-byte over `/dev/ttyUSB2`.
+
 ## Pinout
 
 From `~/dev/de25_std/Demonstration/FPGA/golden_top/golden_top.qsf`:
