@@ -118,11 +118,16 @@ configuration is retried after a ~100 ms back-off.
 
 ## Status
 
-Clean synthesis/fit/assembly on both `de25_uart` and `de25_soc`,
-source-grounded throughout against Terasic's own reference design, and
-programmed onto a DE25-Standard. Not yet *confirmed* on that hardware,
-though - no USB-serial adapter was attached to the fabric UART GPIO
-header (see the top-level README) during that programming run to read
-back register 10/11, and the fan's actual sound/speed was not observed
-directly. Wire up a fabric UART adapter (or listen to the fan) and update
-this section once it has been.
+**Hardware-confirmed working**: programmed onto a DE25-Standard, fan
+audibly much quieter at the 3500 RPM default than whatever it was
+running at before (no board-management IP present in this project at
+all, so previously the fan was running open-loop/uncontrolled at
+whatever the MAX6650 defaults to out of reset).
+
+Not yet done: reading back register 10/11 over the fabric UART to get an
+actual RPM number and confirm `config_readback` reads `0x29` (no
+USB-serial adapter was attached to the GPIO header for this) - so it is
+confirmed quieter, not yet confirmed exactly how fast the fan is
+spinning or that the I2C link is fully healthy. If 3500 RPM turns out
+louder than necessary, or too low once it's easy to check RPM directly,
+walk `g_fan_min_rpm` down/up and rebuild.
