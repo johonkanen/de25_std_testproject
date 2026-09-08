@@ -27,6 +27,7 @@
 #include "noc_firewall.h"
 #include "rstmgr.h"
 #include "rstmgr_regs.h"
+#include "smmu.h"
 #include "sysmgr.h"
 #include "uart.h"
 #include "uart_regs.h"
@@ -310,6 +311,30 @@ int main(void) {
         (void)noc_firewall_close(noc_fw_handle);
     } else {
         send_str(uart1, "noc_firewall_open failed\r\n");
+    }
+
+    /* Diagnostic only (read-only, no behaviour change yet): per
+     * baremetal-drivers' own test/simics/bridge/bridge_test.c, "if SMMU
+     * is enabled, then MBOX_HPS_FPGA_CONFIG_COMP isolates the connection
+     * between HPS and FPGA" - i.e. there may be a required SDM mailbox
+     * handshake, on top of everything above, before the SMMU lets HPS<->
+     * FPGA traffic through at all. Check SMMU status first so a mailbox
+     * implementation attempt isn't wasted if SMMU is already disabled
+     * (in which case, per that same reference test's own logic, this
+     * isn't the blocker). */
+    int32_t smmu_handle = smmu_open("/dev/smmu0", 0);
+    if (smmu_handle >= 0) {
+        uint32_t smmu_iidr = 0, smmu_cr0 = 0;
+        (void)smmu_ioctl(smmu_handle, (uint32_t)IOCTL_SMMU_IIDR_GET, (uintptr_t)&smmu_iidr, sizeof(smmu_iidr));
+        (void)smmu_ioctl(smmu_handle, (uint32_t)IOCTL_SMMU_CR0_GET, (uintptr_t)&smmu_cr0, sizeof(smmu_cr0));
+        send_str(uart1, "smmu IIDR = 0x");
+        send_hex_u32(uart1, smmu_iidr);
+        send_str(uart1, " CR0 = 0x");
+        send_hex_u32(uart1, smmu_cr0);
+        send_str(uart1, (smmu_cr0 & 0x1U) ? "  -> SMMU_EN set\r\n" : "  -> SMMU_EN clear\r\n");
+        (void)smmu_close(smmu_handle);
+    } else {
+        send_str(uart1, "smmu_open failed\r\n");
     }
 
     /* self-test: register 1 is the constant id, 0x0000DE25 */

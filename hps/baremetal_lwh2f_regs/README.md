@@ -15,19 +15,19 @@ fuller account of the pin-mux / clkmgr bring-up shared by both.
 Agilex 5 HPS TRM (an earlier guess, `0xF9000000` - the Stratix10/Agilex1
 convention that no locally available source could confirm or deny for
 Agilex 5's newer NOC-based HPS - was tried first and empirically hung the
-same way; see git history). Two more things software normally has to do
-before an HPS-to-FPGA bridge is usable at all - both missing when running
-bare-metal with no ATF, since ATF normally does them before Linux/U-Boot
-ever runs - were added and both confirmed working on hardware via debug
-tracing over UART1:
+same way; see git history). Every concrete thing found in
+`hps/baremetal-drivers` that software normally has to do before an
+HPS-to-FPGA bridge is usable - all missing when running bare-metal with
+no ATF, since ATF normally does them before Linux/U-Boot ever runs - has
+been added and confirmed correctly applied on hardware via debug tracing
+over UART1, and **none of it has changed the hang**:
 
 1. **Bridge reset + enable** (`lwh2f_bridge_enable()`): deasserts
    `rstmgr`'s `LWSOC2FPGA` bit in `brgmodrst`, clears the idle handshake,
    and sets `LWSOC2FPGA_EN` in `sysmgr`'s `FPGA_BRIDGE_CTRL` - the
    LWSOC2FPGA-only subset of `baremetal-drivers`' `bridge_helper.cpp`
-   `bridge_enable()` (which also does SOC2FPGA/F2SOC/F2SDRAM via SDM
-   mailbox + SMMU machinery this test doesn't need, since those bridges
-   are disabled in `hps_subsystem.qsys`). Confirmed on hardware:
+   `bridge_enable()` (which also does SOC2FPGA/F2SOC/F2SDRAM, since those
+   bridges are disabled in `hps_subsystem.qsys`). Confirmed on hardware:
    `brgmodrst` read `0x4F` (LWSOC2FPGA bit set, i.e. in reset) before and
    `0x4D` (bit cleared) after; the idle handshake ack cleared immediately;
    `fpga_bridge_ctrl` read `0x0` before and `0x2` after.
@@ -39,26 +39,48 @@ tracing over UART1:
    `0x0FFE0301` before any write (bit 0 - the bit this test sets - was
    already `1`, so this register was likely not the blocker) and `0x1`
    after explicitly setting it.
+3. **`lwhps2fpga_axi_reset_reset` delayed like the rest of the reset
+   tree** (`de25_soc_top.vhd`) instead of tied straight to `not
+   CPU_RESET_n` (releasing within a clock or two of FPGA configuration
+   finishing) - on the project owner's own prior experience, a bridge
+   hard macro whose reset releases before the FPGA fabric driving it has
+   settled can come up permanently wedged. Tried **both polarities**
+   (asserted-high-for-~21ms-then-low, and the inverse) - synthesizes/
+   fits/assembles clean either way, **identical hang both times**.
+4. **SMMU status checked** - `hps/baremetal-drivers`' own
+   `test/simics/bridge/bridge_test.c` (the *actual* official bridge
+   test - an earlier pass through this project mischaracterised it by
+   its directory name alone) notes "if SMMU is enabled, then
+   MBOX_HPS_FPGA_CONFIG_COMP isolates the connection between HPS and
+   FPGA", i.e. a required SDM mailbox handshake might gate bridge
+   traffic when SMMU is on. Checked directly on hardware first, before
+   implementing the mailbox call, so as not to chase it blind: `smmu
+   IIDR = 0x4832243B` (matches the datasheet ID exactly - the read
+   itself works) `CR0 = 0x00000000` - **SMMU_EN clear**. Per that same
+   reference test's own conditional logic, the mailbox handshake is not
+   needed when SMMU is disabled, so this is ruled out too.
 
-**Both confirmed applied correctly, and the board still hangs** on the
-register-1 self-test read - banner prints (now including the debug trace
-of both steps above), then silence, exactly like the wrong-address guess
-did. `axi_lwh2f_bridge.vhd`'s read path has a 7-cycle watchdog that
-returns 0 if a request reaches it but nothing answers within the FPGA
-fabric - so a multi-second hang, rather than that quick built-in timeout,
-means the ARM's AXI transaction most likely never reaches the FPGA fabric
-pins at all. `de25_soc_top.vhd`'s port wiring from `hps_subsystem`'s
+Every one of the four items above was independently confirmed correct or
+inapplicable, and the board still hangs on the register-1 self-test read
+- banner prints (now including the debug trace for all four), then
+silence, exactly like the very first wrong-address guess did.
+`axi_lwh2f_bridge.vhd`'s read path has a 7-cycle watchdog that returns 0
+if a request reaches it but nothing answers within the FPGA fabric - so
+a multi-second hang, rather than that quick built-in timeout, means the
+ARM's AXI transaction most likely never reaches the FPGA fabric pins at
+all. `de25_soc_top.vhd`'s port wiring from `hps_subsystem`'s
 `lwhps2fpga_*` ports through to `axi_lwh2f_bridge.vhd` was re-checked by
 hand and looks correct (signal directions and names all match).
 
-That leaves the physical address itself still suspect (despite being
-given directly rather than guessed - possibly it needs combining with
-another base, or there's windowing/pagination this test doesn't do), or a
-NOC-level permission/routing gate neither `bridge_helper.cpp` nor
-`noc_firewall.h` expose (both are the full extent of what
-`hps/baremetal-drivers` offers for this). Recovering from every hang so
-far has just been a JTAG reprogram with a known-good image; nothing else
-on the board has been affected.
+That leaves either the physical address itself still suspect (despite
+being given directly rather than guessed - possibly it needs combining
+with another base, or there's windowing/pagination this test doesn't
+do), or a NOC-level permission/routing gate that isn't exposed anywhere
+in `hps/baremetal-drivers` - which, between `bridge_helper.cpp`,
+`noc_firewall.h` and the SMMU driver, has now been checked about as far
+as it documents itself going. Recovering from every hang so far has just
+been a JTAG reprogram with a known-good image; nothing else on the board
+has been affected.
 
 ## Register map
 
