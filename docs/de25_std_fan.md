@@ -60,18 +60,33 @@ KTACH = ((992 * KSCALE) / (RPM / 60)) - 1
 ```
 
 straight from Terasic's own `auto_fan.v`. `g_fan_min_rpm` (default
-**3500**) is converted to KTACH at elaboration time for register 9's
-reset value - `3500 -> KTACH 33` with `KSCALE = 2`.
+**1500**) is converted to KTACH at elaboration time for register 9's
+reset value - `1500 -> KTACH 78` with `KSCALE = 2`.
 
-3500 RPM is Terasic's own `auto_fan.v` curve's minimum (its "Speed8", the
-quietest point in their validated 3500-6000 RPM auto-fan ramp) - a
-**vendor-chosen floor, not a soak-tested one**. Compare the DE25-Nano's
-`g_fan_min_duty`, which was walked down live against real hardware and
-measured holding a stable RPM for a 30 s soak (see
-`de25_nano_testproject/docs/de25_nano_fan.md`) - nothing here has had
-that same treatment yet. If 3500 RPM turns out to be higher (louder) or
-lower (unstable) than necessary once this is on real hardware, walk
-`g_fan_min_rpm` the same way that project's minimum duty was found.
+### What was walked, live on a DE25-Standard
+
+Terasic's own `auto_fan.v` curve minimum is 3500 RPM (its "Speed8", the
+quietest point in their validated 3500-6000 RPM auto-fan ramp) - that was
+the starting default. From there, `g_fan_min_rpm` was walked down by
+rebuilding `de25_uart` (no HPS, so no payload-embedding step - much
+faster to iterate than `de25_soc`) and reprogramming over JTAG each step,
+listening each time:
+
+| RPM | result |
+|----:|--------|
+| 3500 | audibly much quieter than the uncontrolled startup speed |
+| 2500 | almost inaudible |
+| 2000 | still audible |
+| 1500 | reported completely silent by ear - checked by eye too, confirmed still spinning |
+
+**1500 is the setting now, but this was an audible/visual check, not the
+DE25-Nano's kind of soak test** (`de25_nano_testproject/docs/de25_nano_fan.md`
+held a duty steady for 30 s while watching a live RPM register). No
+telemetry was read back at any step here - see Status below. Going
+quieter at each RPM step down to 1500, with 2000 still audibly spinning
+right before it, is what makes silence at 1500 read as "very quiet
+survives" rather than "already stalled by 2000 and 1500 is no
+different" - but without an RPM reading it isn't proven either way.
 
 ## Measuring speed
 
@@ -118,16 +133,21 @@ configuration is retried after a ~100 ms back-off.
 
 ## Status
 
-**Hardware-confirmed working**: programmed onto a DE25-Standard, fan
-audibly much quieter at the 3500 RPM default than whatever it was
-running at before (no board-management IP present in this project at
-all, so previously the fan was running open-loop/uncontrolled at
-whatever the MAX6650 defaults to out of reset).
+**Hardware-confirmed working and quiet**: programmed onto a DE25-Standard
+and walked from 3500 RPM down to the current **1500 RPM** default (see
+the table above), by ear at every step and confirmed still spinning by
+eye at 1500. Previously the fan ran open-loop/uncontrolled at whatever
+the MAX6650 defaults to out of reset - no board-management IP is present
+in this project at all, so nothing configured the chip before this
+driver existed.
 
 Not yet done: reading back register 10/11 over the fabric UART to get an
 actual RPM number and confirm `config_readback` reads `0x29` (no
-USB-serial adapter was attached to the GPIO header for this) - so it is
-confirmed quieter, not yet confirmed exactly how fast the fan is
-spinning or that the I2C link is fully healthy. If 3500 RPM turns out
-louder than necessary, or too low once it's easy to check RPM directly,
-walk `g_fan_min_rpm` down/up and rebuild.
+USB-serial adapter was attached to the GPIO header this session). So
+1500 RPM is confirmed quiet and confirmed spinning, but not confirmed to
+actually be regulating at 1500 RPM specifically, nor soak-tested for
+long-term stability the way the DE25-Nano's minimum was - and there is
+still no thermal fail-safe (see "Control mode" above): this chip has no
+temperature sensing of its own, unlike the AMC6821. Wire up a fabric
+UART adapter to get real telemetry before trusting this as a
+production setting, particularly under any thermal load.

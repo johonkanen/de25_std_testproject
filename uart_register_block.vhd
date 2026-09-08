@@ -62,10 +62,12 @@ entity uart_register_block is
         -- fan speed after reset, in RPM - converted to the MAX6650's KTACH
         -- encoding for register 9's reset value (see
         -- source/fan_control/max6650_fan_control.vhd's header for the
-        -- formula and why 3500). The single source of truth: also passed
-        -- straight into max6650_fan_control's own g_min_rpm below, so the
-        -- two stay in sync.
-        ;g_fan_min_rpm  : natural := 3500
+        -- formula). The single source of truth: also passed straight into
+        -- max6650_fan_control's own g_min_rpm below, so the two stay in
+        -- sync. 1500 was walked down live on a DE25-Standard from
+        -- Terasic's own auto_fan.v floor of 3500 - see docs/de25_std_fan.md
+        -- for the readings at each step and what was and wasn't confirmed.
+        ;g_fan_min_rpm  : natural := 1500
         ;g_fan_kscale   : natural := 2
     );
     port (

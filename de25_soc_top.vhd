@@ -81,7 +81,7 @@ architecture rtl of de25_soc_top is
         generic (
             g_clock_divider : natural := 434;
             g_por_cycles    : natural := 1_048_575;
-            g_fan_min_rpm   : natural := 3500;
+            g_fan_min_rpm   : natural := 1500;
             g_fan_kscale    : natural := 2
         );
         port (

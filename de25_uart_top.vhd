@@ -39,6 +39,12 @@ entity de25_uart_top is
     generic (
         g_clock_divider : natural := 434
         ;g_por_cycles   : natural := 1_048_575
+        -- fan speed after reset - matches uart_register_block.vhd's own
+        -- default (1500 RPM, confirmed spinning on a real DE25-Standard -
+        -- see docs/de25_std_fan.md). Threaded through as a generic here
+        -- too since it was useful for walking the value down live; no
+        -- need to override it for a normal build.
+        ;g_fan_min_rpm  : natural := 1500
     );
     port (
         CLOCK0_50     : in  std_logic                       -- 50 MHz (PIN_CH128)
@@ -60,6 +66,7 @@ begin
     generic map (
         g_clock_divider => g_clock_divider
         ,g_por_cycles   => g_por_cycles
+        ,g_fan_min_rpm  => g_fan_min_rpm
     )
     port map (
         core_clock  => CLOCK0_50
