@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Linux device tree for the Terasic DE25-Standard (Agilex 5 SoC),
+ * matching the minimal `de25_soc` FPGA build in this repo:
+ *   HPS peripherals: EMAC0 (RGMII+MDIO), SD/MMC 4-bit, UART1 console,
+ *                    USB0, I2C1, SPIM0.
+ *   FPGA<->HPS bridges: DISABLED - so there are deliberately NO
+ *   soc2fpga / lwsoc2fpga / fpga2sdram device nodes here.  The base
+ *   fpga-region / fpga-mgr from socfpga_agilex5.dtsi stay (they are
+ *   passive until an overlay loads a bitstream).
+ *
+ * FIRST CUT - derived from Terasic's socfpga_agilex5_de25_nano.dts.
+ * Verify against the DE25-Standard schematic before trusting on HW:
+ *   - Ethernet PHY MDIO address (KSZ9031RNX; assumed 1 here)
+ *   - RGMII skew / any board strapping
+ *   - SD card-detect / write-protect GPIO (none wired here)
+ *   - USB0: USB3300 ULPI PHY + USB251xb hub reset (not modelled)
+ */
+
+#include "socfpga_agilex5.dtsi"
+
+/ {
+	model = "Terasic DE25-Standard (Agilex 5)";
+	compatible = "terasic,de25-standard", "intel,socfpga-agilex5";
+
+	aliases {
+		serial0 = &uart1;
+		ethernet0 = &gmac0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		/*
+		 * bootargs are set by U-Boot (see linux/de25_uboot.config-fragment).
+		 * UART1 (HPS pin mux) is at 0x10c02100 - the stock de25_nano DT
+		 * copied the dev-kit's 0x10c02000 (UART0) by mistake.
+		 */
+	};
+
+	memory {
+		device_type = "memory";
+		/* filled in by U-Boot from the EMIF handoff */
+		reg = <0 0x80000000 0 0x80000000>;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		hps0 {
+			label = "hps_led0";
+			/* HPS_LED = hps_io_gpio41 = GPIO1 (portb) bit 17 */
+			gpios = <&portb 17 GPIO_ACTIVE_LOW>;
+		};
+	};
+};
+
+&osc1 {
+	clock-frequency = <25000000>;		/* HPS_CLK_25 */
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&gmac0 {
+	status = "okay";
+	phy-mode = "rgmii-id";
+	phy-handle = <&emac0_phy0>;
+	max-frame-size = <9000>;
+
+	mdio0 {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		compatible = "snps,dwmac-mdio";
+
+		emac0_phy0: ethernet-phy@1 {
+			compatible = "ethernet-phy-id0022.1622";	/* Micrel KSZ9031 */
+			reg = <1>;
+		};
+	};
+};
+
+&mmc {
+	status = "okay";
+	bus-width = <4>;
+	no-1-8-v;
+	cap-sd-highspeed;
+	disable-wp;
+	sd-uhs-sdr50;
+	no-sdio;
+	/* Cadence SD-PHY tuning - carried verbatim from the de25_nano DT */
+	cdns,phy-use-ext-lpbk-dqs = <1>;
+	cdns,phy-use-lpbk-dqs = <1>;
+	cdns,phy-use-phony-dqs = <1>;
+	cdns,phy-use-phony-dqs-cmd = <1>;
+	cdns,phy-io-mask-always-on = <0>;
+	cdns,phy-io-mask-end = <5>;
+	cdns,phy-io-mask-start = <0>;
+	cdns,phy-data-select-oe-end = <1>;
+	cdns,phy-sync-method = <1>;
+	cdns,phy-sw-half-cycle-shift = <0>;
+	cdns,phy-rd-del-sel = <52>;
+	cdns,phy-underrun-suppress = <1>;
+	cdns,phy-gate-cfg-always-on = <1>;
+	cdns,phy-param-dll-bypass-mode = <1>;
+	cdns,phy-param-phase-detect-sel = <2>;
+	cdns,phy-param-dll-start-point = <254>;
+	cdns,hrs09-rddata-en = <1>;
+	cdns,hrs09-rdcmd-en = <1>;
+	cdns,hrs09-extended-wr-mode = <1>;
+	cdns,hrs09-extended-rd-mode = <1>;
+	cdns,hrs10-hcsdclkadj = <3>;
+	cdns,hrs07-rw-compensate = <10>;
+	cdns,hrs07-idelay-val = <0>;
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&i2c1 {
+	status = "okay";
+	/* on-board I2C devices (accelerometer, etc.) - add per schematic */
+};
+
+&spi0 {
+	status = "okay";			/* SPIM0 (HPS pin mux) */
+};
+
+&usb0 {
+	status = "okay";
+	dr_mode = "host";
+	disable-over-current;
+};
+
+&smmu {
+	status = "okay";
+};
+
+&watchdog0 {
+	status = "okay";
+};

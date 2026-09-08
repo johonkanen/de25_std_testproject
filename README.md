@@ -152,6 +152,10 @@ GHRD SD image — it needs its own device tree and U-Boot SPL handoff built
 from this project. The fabric register block still works exactly as in the
 `de25_uart` build.
 
+A first-cut Linux build (`build_de25_linux.sh` + a bridge-free device tree,
+modelled on Altera's roll-your-own GSRD script) is in
+[`linux/`](linux/README.md) — not yet hardware-tested.
+
 ## Pinout
 
 From `~/dev/de25_std/Demonstration/FPGA/golden_top/golden_top.qsf`:

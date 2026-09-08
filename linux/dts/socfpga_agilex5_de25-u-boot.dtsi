@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * U-Boot / SPL additions for the DE25-Standard.
+ * Derived from Terasic's socfpga_agilex5_de25_nano-u-boot.dtsi.
+ *
+ * On Agilex 5 the HPS pin mux / clocks / EMIF calibration are applied by
+ * the SDM from the bitstream before the SPL runs - this file only carries
+ * what the SPL itself needs (boot order, SD-PHY tuning, memory size).
+ */
+
+#include "socfpga_agilex5-u-boot.dtsi"
+
+/ {
+	memory {
+		/* 1 GB; override for the real DDR4 size on the board */
+		reg = <0 0x80000000 0 0x40000000>;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		u-boot,spl-boot-order = &mmc, "/memory";
+	};
+};
+
+&mmc {
+	status = "okay";
+	bus-width = <4>;
+	sd-uhs-sdr50;
+	cap-mmc-highspeed;
+	bootph-all;
+};
+
+&combophy0 {
+	status = "okay";
+	bootph-all;
+	cdns,phy-use-ext-lpbk-dqs = <1>;
+	cdns,phy-use-lpbk-dqs = <1>;
+	cdns,phy-use-phony-dqs = <1>;
+	cdns,phy-use-phony-dqs-cmd = <1>;
+	cdns,phy-io-mask-always-on = <0>;
+	cdns,phy-io-mask-end = <5>;
+	cdns,phy-io-mask-start = <0>;
+	cdns,phy-data-select-oe-end = <1>;
+	cdns,phy-sync-method = <1>;
+	cdns,phy-sw-half-cycle-shift = <0>;
+	cdns,phy-rd-del-sel = <52>;
+	cdns,phy-underrun-suppress = <1>;
+	cdns,phy-gate-cfg-always-on = <1>;
+	cdns,phy-param-dll-bypass-mode = <1>;
+	cdns,phy-param-phase-detect-sel = <2>;
+	cdns,phy-param-dll-start-point = <254>;
+	cdns,hrs09-rddata-en = <1>;
+	cdns,hrs09-rdcmd-en = <1>;
+	cdns,hrs09-extended-wr-mode = <1>;
+	cdns,hrs09-extended-rd-mode = <1>;
+	cdns,hrs10-hcsdclkadj = <3>;
+	cdns,hrs07-rw-compensate = <10>;
+	cdns,hrs07-idelay-val = <0>;
+};
+
+&uart1 {
+	status = "okay";
+	bootph-all;
+};
+
+&qspi {
+	status = "disabled";
+};
+
+#if !defined(CONFIG_SOCFPGA_SECURE_VAB_AUTH)
+&fdt_0_blob {
+	filename = "arch/arm/dts/socfpga_agilex5_de25.dtb";
+};
+
+&binman {
+	/delete-node/ kernel;
+};
+#endif

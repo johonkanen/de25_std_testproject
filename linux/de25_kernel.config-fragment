@@ -1,0 +1,14 @@
+# Kernel config fragment for the DE25-Standard, merged onto the arm64
+# `make defconfig` (which already carries the SoCFPGA stmmac / Cadence
+# SDHCI / DWC3 / QSPI drivers).
+
+# Micrel KSZ9031RNX Ethernet PHY
+CONFIG_MICREL_PHY=y
+
+# boot a cpio initramfs from RAM (first-cut rootfs)
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+
+# ext4 for an SD rootfs once you switch away from initramfs
+CONFIG_EXT4_FS=y

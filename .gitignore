@@ -40,3 +40,6 @@ sim/*.ghw
 # python
 __pycache__/
 *.pyc
+
+# roll-your-own linux build
+linux/build_output/
