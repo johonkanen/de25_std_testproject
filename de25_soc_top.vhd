@@ -110,7 +110,9 @@ architecture rtl of de25_soc_top is
             axi_rresp   : out std_logic_vector(1 downto 0);
             axi_rlast   : out std_logic;
             axi_rvalid  : out std_logic;
-            axi_rready  : in  std_logic := '0'
+            axi_rready  : in  std_logic := '0';
+
+            axi_bridge_reset : out std_logic
         );
     end component uart_register_block;
 
@@ -232,6 +234,11 @@ architecture rtl of de25_soc_top is
     signal lwh2f_rvalid  : std_logic;
     signal lwh2f_rready  : std_logic;
 
+    -- power-on-reset-delayed reset for the HPS's own lwhps2fpga bridge
+    -- hard macro (lwhps2fpga_axi_reset_reset below) - see
+    -- uart_register_block.vhd's axi_bridge_reset port.
+    signal lwh2f_bridge_reset : std_logic;
+
 begin
 
     ------------------------------------------------------------------
@@ -268,7 +275,9 @@ begin
             axi_rresp   => lwh2f_rresp,
             axi_rlast   => lwh2f_rlast,
             axi_rvalid  => lwh2f_rvalid,
-            axi_rready  => lwh2f_rready
+            axi_rready  => lwh2f_rready,
+
+            axi_bridge_reset => lwh2f_bridge_reset
         );
 
     ------------------------------------------------------------------
@@ -300,7 +309,11 @@ begin
             -- lwhps2fpga: wired straight into uart_register_block, on the
             -- same 50 MHz clock as the register file (no CDC needed).
             lwhps2fpga_axi_clock_clk                  => CLOCK0_50,
-            lwhps2fpga_axi_reset_reset                => not CPU_RESET_n,
+            -- power-on-reset-delayed, NOT the raw button (see
+            -- uart_register_block.vhd's axi_bridge_reset port) - releasing
+            -- this bridge hard macro's reset before the FPGA fabric clock
+            -- driving it has settled left it permanently wedged.
+            lwhps2fpga_axi_reset_reset                => lwh2f_bridge_reset,
             lwhps2fpga_awid                           => lwh2f_awid,
             lwhps2fpga_awaddr                         => lwh2f_awaddr,
             lwhps2fpga_awvalid                        => lwh2f_awvalid,

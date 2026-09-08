@@ -83,6 +83,20 @@ entity uart_register_block is
         ;axi_rlast   : out std_logic
         ;axi_rvalid  : out std_logic
         ;axi_rready  : in  std_logic := '0'
+
+        -- Reset for the HPS's own lwhps2fpga bridge hard macro
+        -- (de25_soc_top.vhd's hps_subsystem lwhps2fpga_axi_reset_reset),
+        -- NOT for axi_lwh2f_bridge.vhd above (that one uses the same
+        -- system_reset internally, see u_axi_lwh2f_bridge below). Same
+        -- power-on-reset delay as the rest of this block (~21 ms at
+        -- 50 MHz, see g_por_cycles) rather than releasing the instant
+        -- CPU_RESET_n deasserts: releasing the HPS-side bridge macro's
+        -- reset too early - before the FPGA fabric clock/logic driving
+        -- it has settled - left it permanently wedged (every AXI
+        -- transaction through it hangs the ARM core forever, recoverable
+        -- only by a full JTAG reprogram) even though axi_lwh2f_bridge.vhd
+        -- itself was verified correct in isolation.
+        ;axi_bridge_reset : out std_logic := '1'
     );
 end entity uart_register_block;
 
@@ -263,5 +277,8 @@ begin
         ,bus_from_lwh2f => bus_from_axi
         ,bus_to_lwh2f   => bus_to_axi
     );
+
+------------------------------------------------------------------------
+    axi_bridge_reset <= system_reset;
 
 end rtl;
