@@ -49,7 +49,13 @@ linux/build_output/
 
 # bare-metal HPS test build output (see hps/baremetal_uart1_test/README.md)
 hps/baremetal_uart1_test/build/
+hps/baremetal_lwh2f_regs/build/
 # hps/baremetal-drivers is a `git clone` per that README (or, locally, a
 # symlink to one) - no trailing slash so this also matches the symlink case
 # (a trailing slash would only match a real directory, not a symlink to one).
 hps/baremetal-drivers
+
+# scratch combined .sof images from embedding an HPS binary for JTAG load
+# (quartus_pfg -c output_files/*.sof out.sof -o hps_path=...) - never a
+# build output the project ships or tracks
+/out*.sof
