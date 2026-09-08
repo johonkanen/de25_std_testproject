@@ -11,40 +11,30 @@
  * then UART1 opened and its baud divisor reprogrammed against the
  * measured clock. No ATF, no U-Boot, no Linux, no SD card.
  *
- * *** LWH2F_BASE IS UNVERIFIED - READ THIS ***
- * Intel's Agilex 5 HPS Technical Reference Manual documents the physical
- * address the ARM cores use to reach the LWH2F bridge window, but that
- * manual was not available while writing this file. Exhaustive search of
- * every locally available source - baremetal-drivers (inc. its "bridge"
- * test, which turns out to be about QSPI/NAND reset control, not FPGA
- * bridges), arm-trusted-firmware, u-boot-socfpga, linux-socfpga's device
- * trees (which don't expose a DT node for it on ANY Intel SoCFPGA
- * generation), and both sibling repos this is adapted from - turned up
- * no documented address. LWH2F_BASE below is the address Cyclone V's
- * immediate successors (Arria 10, Stratix 10, Agilex 1/7) have used since
- * their L3-remap generation; Agilex 5 is a newer NOC-based design and may
- * not match. Startup self-tests register 1 (the constant ID, 0x0000DE25)
- * immediately and prints PASS/FAIL before accepting commands - if it
- * prints FAIL (or nothing at all), this address is wrong for this chip;
- * try another candidate and reprogram (`quartus_pgm`, nothing persistent
- * is touched, so this is always safely recoverable) rather than trusting
- * anything this program reads back.
+ * LWH2F_BASE: physical base address of the LWH2F bridge window as seen by
+ * the ARM cores, 0x20000000 - per the Agilex 5 HPS Technical Reference
+ * Manual (not locally available while this file was first drafted; an
+ * earlier revision guessed 0xF9000000, the Stratix10/Agilex1 convention,
+ * which hung the board on first read - see git history for that result).
+ * Startup self-tests register 1 (the constant ID, 0x0000DE25) immediately
+ * and prints PASS/FAIL before accepting commands.
  *----------------------------------------------------------------------*/
 #include <stdint.h>
 
 #include "clkmgr_bringup.h"
 #include "fsbl_boot_help.h"
 #include "hps_address_map.h"
+#include "noc_firewall.h"
 #include "rstmgr.h"
 #include "rstmgr_regs.h"
+#include "sysmgr.h"
 #include "uart.h"
 #include "uart_regs.h"
 
 extern int32_t stdout_uart_fd;
 
-/* Physical base address of the LWH2F window as seen by the ARM cores -
- * UNVERIFIED for Agilex 5, see the file header. */
-#define LWH2F_BASE 0xF9000000UL
+/* Physical base address of the LWH2F window as seen by the ARM cores. */
+#define LWH2F_BASE 0x20000000UL
 
 /* axi_lwh2f_bridge.vhd decodes AXI address bits [19:4] as the register
  * number - each fpga_interconnect register is a 16-byte-aligned LWH2F
@@ -77,6 +67,84 @@ static void uart_set_divisor(uintptr_t base, uint32_t divisor) {
     u->RBR = divisor & 0xFFU;
     u->IER = (divisor >> 8) & 0xFFU;
     u->LCR &= (uint32_t)(~(1UL << 7UL));
+}
+
+#define RST_MGR_BRGMODRST_LWSOC2FPGA 0x00000002U
+#define RST_MGR_HDSKREQ_LWSOC2FPGAFLUSHREQ 0x00000200U
+#define RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK 0x00000200U
+#define SYS_MGR_FPGA_BRIDGE_CTRL_LWSOC2FPGA_EN 0x00000002U
+
+/* Bring the LWH2F bridge itself out of reset and enable it in the system
+ * manager - the LWSOC2FPGA-only subset of baremetal-drivers'
+ * bridge_helper.cpp bridge_enable() (which also does SOC2FPGA/F2SOC/
+ * F2SDRAM via SDM mailbox + SMMU machinery this test doesn't use, since
+ * those bridges are disabled in hps_subsystem.qsys). In the normal boot
+ * chain ATF's agilex5_handoff.c does this before Linux/U-Boot ever runs;
+ * running bare-metal with no ATF, nobody does it unless we do - out of
+ * reset by default, the bridge silently drops every AXI transaction
+ * (an unanswered ARM load just stalls forever - see this project's
+ * README for what that looked like before this function existed). */
+static void lwh2f_bridge_enable(int32_t rstmgr_handle, int32_t sysmgr_handle, int32_t dbg_fd) {
+    uint32_t param = 0;
+    uint32_t param_req = 0;
+    uint32_t param_ack = 0;
+
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST, (uintptr_t)&param, sizeof(param));
+    send_str(dbg_fd, "brgmodrst = 0x");
+    send_hex_u32(dbg_fd, param);
+    send_str(dbg_fd, "\r\n");
+    if (!(param & RST_MGR_BRGMODRST_LWSOC2FPGA)) {
+        send_str(dbg_fd, "LWSOC2FPGA already out of reset\r\n");
+        return;
+    }
+
+    /* De-assert the bridge module reset */
+    param &= ~RST_MGR_BRGMODRST_LWSOC2FPGA;
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_BRGMODRST, (uintptr_t)&param, sizeof(param));
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST, (uintptr_t)&param, sizeof(param));
+    send_str(dbg_fd, "brgmodrst after deassert = 0x");
+    send_hex_u32(dbg_fd, param);
+    send_str(dbg_fd, "\r\n");
+
+    /* Clear the flush ack, then the flush request (idle handshake) */
+    param_ack = RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK;
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_HDSKACK, (uintptr_t)&param_ack, sizeof(param_ack));
+
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_HDSKREQ, (uintptr_t)&param_req, sizeof(param_req));
+    send_str(dbg_fd, "hdskreq = 0x");
+    send_hex_u32(dbg_fd, param_req);
+    send_str(dbg_fd, "\r\n");
+    if (param_req & RST_MGR_HDSKREQ_LWSOC2FPGAFLUSHREQ) {
+        param_req &= ~RST_MGR_HDSKREQ_LWSOC2FPGAFLUSHREQ;
+        (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_HDSKREQ, (uintptr_t)&param_req, sizeof(param_req));
+    }
+
+    /* Wait for the ack to clear - bounded busy-poll, no timer device
+     * opened in this minimal test. */
+    uint32_t i;
+    for (i = 0; i < 1000000U; i++) {
+        (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_HDSKACK, (uintptr_t)&param_ack, sizeof(param_ack));
+        if (!(param_ack & RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK)) {
+            break;
+        }
+    }
+    send_str(dbg_fd, "hdskack poll: ");
+    send_str(dbg_fd, (i < 1000000U) ? "cleared, iters=0x" : "TIMED OUT, iters=0x");
+    send_hex_u32(dbg_fd, i);
+    send_str(dbg_fd, " final ack=0x");
+    send_hex_u32(dbg_fd, param_ack);
+    send_str(dbg_fd, "\r\n");
+
+    /* Enable the bridge in the system manager */
+    (void)sysmgr_ioctl(sysmgr_handle, (int32_t)IOCTL_SYSMGR_GET_FPGA_BRIDGE_CTRL, (uintptr_t)&param, sizeof(param));
+    send_str(dbg_fd, "fpga_bridge_ctrl before = 0x");
+    send_hex_u32(dbg_fd, param);
+    param |= SYS_MGR_FPGA_BRIDGE_CTRL_LWSOC2FPGA_EN;
+    (void)sysmgr_ioctl(sysmgr_handle, (int32_t)IOCTL_SYSMGR_SET_FPGA_BRIDGE_CTRL, (uintptr_t)&param, sizeof(param));
+    (void)sysmgr_ioctl(sysmgr_handle, (int32_t)IOCTL_SYSMGR_GET_FPGA_BRIDGE_CTRL, (uintptr_t)&param, sizeof(param));
+    send_str(dbg_fd, " after = 0x");
+    send_hex_u32(dbg_fd, param);
+    send_str(dbg_fd, "\r\n");
 }
 
 static int32_t recv_char_blocking(int32_t fd) {
@@ -180,7 +248,6 @@ int main(void) {
         (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_READ, (uintptr_t)(&regs), sizeof(regs));
         regs.per1modrst &= ~((uint32_t)0x00030000);
         (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_WRITE, (uintptr_t)(&regs), sizeof(regs));
-        (void)rstmgr_close(rstmgr_handle);
     }
 
     int32_t uart1 = uart_open("/dev/uart1", 0);
@@ -201,17 +268,58 @@ int main(void) {
     send_str(uart1, "reads/writes uart_register_block.vhd's registers over lwhps2fpga\r\n");
     send_str(uart1, "LWH2F_BASE = 0x");
     send_hex_u32(uart1, (uint32_t)LWH2F_BASE);
-    send_str(uart1, "  -  UNVERIFIED for Agilex 5, see this file's header\r\n");
+    send_str(uart1, "\r\n");
+
+    if (rstmgr_handle >= 0) {
+        int32_t sysmgr_handle = sysmgr_open("/dev/sysmgr", 0);
+        if (sysmgr_handle >= 0) {
+            lwh2f_bridge_enable(rstmgr_handle, sysmgr_handle, uart1);
+            (void)sysmgr_close(sysmgr_handle);
+        } else {
+            send_str(uart1, "sysmgr_open failed\r\n");
+        }
+        (void)rstmgr_close(rstmgr_handle);
+    } else {
+        send_str(uart1, "rstmgr_open failed\r\n");
+    }
+
+    /* NOC firewall: bridge_enable() only takes the bridge out of reset and
+     * flags it enabled in the system manager - a *separate* per-master
+     * security/permission register (noc_firewall0's LWSOC2FPGA SCR, same
+     * one as hps_address_map.h's SOCFPGA_L4_LWHPS2FPA_SCR_BASE) gates
+     * which masters may actually use it. Reset default locks this down;
+     * in the normal boot chain ATF's security setup opens it before
+     * anything else runs. Mirrors this driver's own noc_firewall test
+     * (test/simics/noc_firewall/noc_firewall_test.c), which sets the same
+     * bit for every bridge it exercises. */
+    int32_t noc_fw_handle = noc_firewall_open("/dev/noc_firewall0", 0);
+    if (noc_fw_handle >= 0) {
+        uint32_t scr = 0;
+        (void)noc_firewall_ioctl(noc_fw_handle, (int32_t)IOCTL_NOC_FIREWALL_GET_LWSOC2FPGA, (uintptr_t)&scr,
+                                  sizeof(scr));
+        send_str(uart1, "lwsoc2fpga SCR before = 0x");
+        send_hex_u32(uart1, scr);
+        scr = 0x1U;
+        (void)noc_firewall_ioctl(noc_fw_handle, (int32_t)IOCTL_NOC_FIREWALL_SET_LWSOC2FPGA, (uintptr_t)&scr,
+                                  sizeof(scr));
+        (void)noc_firewall_ioctl(noc_fw_handle, (int32_t)IOCTL_NOC_FIREWALL_GET_LWSOC2FPGA, (uintptr_t)&scr,
+                                  sizeof(scr));
+        send_str(uart1, " after = 0x");
+        send_hex_u32(uart1, scr);
+        send_str(uart1, "\r\n");
+        (void)noc_firewall_close(noc_fw_handle);
+    } else {
+        send_str(uart1, "noc_firewall_open failed\r\n");
+    }
 
     /* self-test: register 1 is the constant id, 0x0000DE25 */
     uint32_t id = *lwh2f_reg(1);
     send_str(uart1, "self-test: register 1 (id) = 0x");
     send_hex_u32(uart1, id);
     if (id == 0x0000DE25U) {
-        send_str(uart1, "  -> PASS, LWH2F_BASE is correct\r\n");
+        send_str(uart1, "  -> PASS\r\n");
     } else {
-        send_str(uart1, "  -> FAIL (expected 0x0000DE25) - LWH2F_BASE is wrong for this chip;\r\n"
-                        "     do not trust reads/writes below, try another candidate address.\r\n");
+        send_str(uart1, "  -> FAIL (expected 0x0000DE25) - do not trust reads/writes below.\r\n");
     }
 
     print_help(uart1);

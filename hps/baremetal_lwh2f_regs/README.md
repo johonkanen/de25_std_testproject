@@ -9,45 +9,56 @@ approach as [`../baremetal_uart1_test`](../baremetal_uart1_test) — **no ATF,
 no U-Boot, no Linux, no SD card** — see that directory's README for the
 fuller account of the pin-mux / clkmgr bring-up shared by both.
 
-## ⚠️ LWH2F_BASE is an unverified guess
+## ⚠️ Still hangs on real hardware - unresolved
 
-`hps_lwh2f_regs.c`'s `LWH2F_BASE` (`0xF9000000`) is **not** confirmed against
-Intel's Agilex 5 HPS Technical Reference Manual — that manual wasn't
-available while writing this. It's the address Cyclone V's successors
-(Arria 10, Stratix 10, Agilex 1/7) have used for their LWH2F window since
-their L3-remap generation; Agilex 5 is a newer NOC-based HPS and may not
-match. An exhaustive search of everything available locally — this
-project's `hps/baremetal-drivers` (including its "bridge" test, which turns
-out to be about QSPI/NAND reset control, not FPGA bridges), the ATF and
-U-Boot sources under `linux/build_output/`, `linux-socfpga`'s device trees
-(no Intel SoCFPGA generation exposes a DT node for this bridge), and the
-`~/dev/datacenter_peak_shaving` project this VHDL pattern is adapted from
-(its `axi_led.vhd` fabric side is wired but was never, it turns out,
-exercised by real ARM-side software) — found no documented address.
+`LWH2F_BASE` is `0x20000000`, given directly by the project owner from the
+Agilex 5 HPS TRM (an earlier guess, `0xF9000000` - the Stratix10/Agilex1
+convention that no locally available source could confirm or deny for
+Agilex 5's newer NOC-based HPS - was tried first and empirically hung the
+same way; see git history). Two more things software normally has to do
+before an HPS-to-FPGA bridge is usable at all - both missing when running
+bare-metal with no ATF, since ATF normally does them before Linux/U-Boot
+ever runs - were added and both confirmed working on hardware via debug
+tracing over UART1:
 
-The program self-tests on startup: it reads register 1 (the constant ID,
-always `0x0000DE25`) immediately after UART1 comes up and prints PASS/FAIL
-*before* accepting any commands. If it prints FAIL (or nothing at all,
-because the read hung/faulted), `LWH2F_BASE` is wrong for this chip — do not
-trust any register read/write below it. Recovering from a wrong guess is
-just a JTAG reprogram (`quartus_pgm`), same as everything else in this
-project: nothing persistent is touched.
+1. **Bridge reset + enable** (`lwh2f_bridge_enable()`): deasserts
+   `rstmgr`'s `LWSOC2FPGA` bit in `brgmodrst`, clears the idle handshake,
+   and sets `LWSOC2FPGA_EN` in `sysmgr`'s `FPGA_BRIDGE_CTRL` - the
+   LWSOC2FPGA-only subset of `baremetal-drivers`' `bridge_helper.cpp`
+   `bridge_enable()` (which also does SOC2FPGA/F2SOC/F2SDRAM via SDM
+   mailbox + SMMU machinery this test doesn't need, since those bridges
+   are disabled in `hps_subsystem.qsys`). Confirmed on hardware:
+   `brgmodrst` read `0x4F` (LWSOC2FPGA bit set, i.e. in reset) before and
+   `0x4D` (bit cleared) after; the idle handshake ack cleared immediately;
+   `fpga_bridge_ctrl` read `0x0` before and `0x2` after.
+2. **NOC firewall permission** (`noc_firewall0`'s `LWSOC2FPGA` register,
+   the same one as `hps_address_map.h`'s
+   `SOCFPGA_L4_LWHPS2FPA_SCR_BASE`) - a *separate* per-master security
+   register gating which masters may use the bridge, mirroring this
+   driver's own `noc_firewall_test.c`. Confirmed on hardware: read back
+   `0x0FFE0301` before any write (bit 0 - the bit this test sets - was
+   already `1`, so this register was likely not the blocker) and `0x1`
+   after explicitly setting it.
 
-If you have the Agilex 5 HPS TRM, the real fix is to replace `LWH2F_BASE`
-with the documented value and rebuild.
+**Both confirmed applied correctly, and the board still hangs** on the
+register-1 self-test read - banner prints (now including the debug trace
+of both steps above), then silence, exactly like the wrong-address guess
+did. `axi_lwh2f_bridge.vhd`'s read path has a 7-cycle watchdog that
+returns 0 if a request reaches it but nothing answers within the FPGA
+fabric - so a multi-second hang, rather than that quick built-in timeout,
+means the ARM's AXI transaction most likely never reaches the FPGA fabric
+pins at all. `de25_soc_top.vhd`'s port wiring from `hps_subsystem`'s
+`lwhps2fpga_*` ports through to `axi_lwh2f_bridge.vhd` was re-checked by
+hand and looks correct (signal directions and names all match).
 
-**Tried and empirically ruled out:** `0xF9000000` (the address builds and
-programs cleanly). On real DE25-Standard hardware the banner prints in
-full, then the board goes silent forever partway into the self-test read —
-no PASS, no FAIL, nothing. `baremetal-drivers` installs no exception vector
-table, so this is consistent with the load either faulting into an
-unhandled/default vector or (more likely, since the AXI protocol is a
-request/response handshake) the ARM core simply stalling forever on a
-load whose AXI request never reaches anything that answers it — i.e. this
-address isn't routed to the LWH2F NOC endpoint at all. Recovering just
-took reprogramming over JTAG with a known-good image; nothing else on the
-board was affected. Whatever address is tried next, expect the same
-silent-hang failure mode if it's also wrong, not a clean error.
+That leaves the physical address itself still suspect (despite being
+given directly rather than guessed - possibly it needs combining with
+another base, or there's windowing/pagination this test doesn't do), or a
+NOC-level permission/routing gate neither `bridge_helper.cpp` nor
+`noc_firewall.h` expose (both are the full extent of what
+`hps/baremetal-drivers` offers for this). Recovering from every hang so
+far has just been a JTAG reprogram with a known-good image; nothing else
+on the board has been affected.
 
 ## Register map
 
