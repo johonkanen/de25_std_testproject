@@ -12,6 +12,21 @@
 CONFIG_DEFAULT_DEVICE_TREE="socfpga_agilex5_de25_nano"
 CONFIG_BOOTFILE="Image"
 
+# The board's own socfpga_agilex5_de25_nano_defconfig disables UHS/IO-voltage
+# switching (not just the DT) - the generic socfpga_agilex5_defconfig this
+# fragment merges onto leaves it enabled. SD/eMMC slots that aren't wired
+# for the 3.3V->1.8V UHS signaling switch can end up stuck mid-negotiation
+# if software attempts it anyway - every SD command timing out from the very
+# first one (SRS12 command-timeout in ATF's driver, silent hang -> watchdog
+# reset in U-Boot SPL's) is exactly that failure mode. Matching de25_nano's
+# own explicit disables here, not just its DT, closes that gap.
+CONFIG_MMC_SPEED_MODE_SET=y
+CONFIG_ISO_PARTITION=n
+CONFIG_EFI_PARTITION=n
+CONFIG_SPL_MMC_UHS_SUPPORT=n
+CONFIG_MMC_UHS_SUPPORT=n
+CONFIG_SPL_MMC_IO_VOLTAGE=n
+
 # no NAND / UBI on this board
 CONFIG_NAND_BOOT=n
 CONFIG_SPL_NAND_SUPPORT=n

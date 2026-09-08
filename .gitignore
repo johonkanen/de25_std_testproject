@@ -47,6 +47,12 @@ __pycache__/
 linux/build_output/
 *.BAK.ip
 
+# freertos QSPI/SD-boot experiment - build output only, no tracked sources
+freertos/build_output/
+
+# Quartus-generated board-migration metadata, regenerated per project open
+hps/board.info
+
 # bare-metal HPS test build output (see hps/baremetal_uart1_test/README.md)
 hps/baremetal_uart1_test/build/
 hps/baremetal_lwh2f_regs/build/

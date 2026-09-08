@@ -163,7 +163,9 @@ still works exactly as in the `de25_uart` build.
 A first-cut Linux build (`build_de25_linux.sh` + a bridge-free device tree,
 modelled on Altera's roll-your-own GSRD script) is in
 [`linux/`](linux/README.md). It builds end to end (ATF + U-Boot + kernel +
-toybox initramfs + `sdcard.img`); not yet booted on hardware.
+toybox initramfs + `sdcard.img`) and **has booted to a live root shell on
+hardware**, via SD card — see [`linux/README.md`](linux/README.md) for the
+current status and the SD-boot fix that made it work.
 
 **Talking to the HPS today, with none of that**:
 [`hps/baremetal_uart1_test/`](hps/baremetal_uart1_test/README.md) is a

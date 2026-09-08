@@ -5,6 +5,14 @@
 # Micrel KSZ9031RNX Ethernet PHY
 CONFIG_MICREL_PHY=y
 
+# Allow /dev/mem access to arbitrary physical addresses (e.g. the LWH2F
+# bridge window, which has no device tree node of its own) - the default
+# CONFIG_STRICT_DEVMEM only permits addresses already present in the IO
+# resource tree, and the `iomem=relaxed` boot parameter does NOT override
+# this on arm64 the way it does on x86 (confirmed empirically: still
+# SIGBUS with it set). This is a debug convenience, not something to ship.
+# CONFIG_STRICT_DEVMEM is not set
+
 # boot a cpio initramfs from RAM (first-cut rootfs)
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_DEVTMPFS=y
