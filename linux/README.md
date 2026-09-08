@@ -2,24 +2,25 @@
 
 A **first-cut** Linux build for the minimal `de25_soc` FPGA design (Agilex 5,
 all FPGA↔HPS bridges disabled). Structure follows Altera's
-`agilex5e-ed-gsrd` "roll-your-own" script; the device tree follows Terasic's
-`socfpga_agilex5_de25_nano.dts`, minus anything that touches the fabric.
+`agilex5e-ed-gsrd` "roll-your-own" script.
 
-> ⚠️ **Not run on hardware.** Everything builds, the DT compiles against the
-> Agilex 5 kernel tree, but the board-specific values (Ethernet PHY MDIO
-> address, RGMII skew, USB PHY/hub, SD detect, I2C map) are copied from the
-> DE25-Nano and must be checked against the DE25-Standard schematic. Iterate
-> on the DT over the HPS UART console.
+> ✅ **The build runs end to end** (Quartus 26.1.1, `QPDS26.1.1_REL_GSRD_PR`)
+> and produces every artifact below.
+> ⚠️ **Not booted on hardware.** U-Boot/SPL use the upstream
+> `socfpga_agilex5_de25_nano` DT; only the Linux kernel gets this repo's
+> `socfpga_agilex5_de25.dts`, whose board-specific values (KSZ9031 MDIO
+> address, RGMII skew, USB PHY/hub, SD detect, I2C map) are still guesses —
+> verify against the DE25-Standard schematic and iterate over the HPS UART
+> console.
 
 ## Files
 
 | file | what |
 |------|------|
-| `build_de25_linux.sh` | orchestrator — toolchain, ATF, U-Boot, kernel, initramfs, `sdcard.img` |
-| `dts/socfpga_agilex5_de25.dts` | Linux device tree (EMAC0/KSZ9031, SD/MMC, UART1 console, USB0, I2C1, SPIM0; **no bridge nodes**) |
-| `dts/socfpga_agilex5_de25-u-boot.dtsi` | U-Boot/SPL additions (boot order, SD-PHY tuning, memory size) |
-| `de25_uboot.config-fragment` | merged onto `socfpga_agilex5_defconfig` — SD boot, no NAND, bootcmd |
-| `de25_kernel.config-fragment` | merged onto arm64 `defconfig` — `CONFIG_MICREL_PHY` etc. |
+| `build_de25_linux.sh` | orchestrator — toolchain shim, ATF, U-Boot, kernel, toybox initramfs, `sdcard.img` |
+| `dts/socfpga_agilex5_de25.dts` | **Linux** device tree (EMAC0/KSZ9031, SD/MMC, UART1 console, USB0, I2C1, SPIM0; **no bridge nodes**) |
+| `de25_uboot.config-fragment` | onto `socfpga_agilex5_defconfig` — DT = upstream `socfpga_agilex5_de25_nano`, SD boot, no NAND, bootcmd |
+| `de25_kernel.config-fragment` | onto arm64 `defconfig` — `CONFIG_MICREL_PHY` etc. |
 
 ## Prerequisites
 
@@ -27,8 +28,18 @@ Linux host, internet, ~25 GB free, and:
 ```
 git wget xz-utils bc bison flex libssl-dev python3 mtools dosfstools
 ```
-Quartus 26.1.1 in `PATH` (for the `quartus_pfg` JIC step). The script
-downloads its own aarch64 musl toolchain.
+Quartus 26.1.1 in `PATH` (for the `quartus_pfg` JIC step).
+
+The script auto-downloads the **ARM GNU `aarch64-none-linux-gnu`** toolchain
+(the landley musl one the Altera reference uses lacks the LTO plugin ATF
+needs). Overrides:
+
+| env | for |
+|-----|-----|
+| `CROSS_TOOLCHAIN=<dir>` | use an existing toolchain (dir with `bin/aarch64-none-linux-gnu-gcc`) instead of downloading |
+| `MTOOLS_BIN=<dir>` | where `mformat`/`mcopy` live if `mtools` isn't installed system-wide |
+| `SOF=<path>` | FPGA `.sof` (default `output_files/de25_soc.sof`) |
+| `QPDS_REF=<tag>` | git tag on the altera-fpga repos (match your Quartus version) |
 
 ## Build
 
@@ -42,12 +53,20 @@ quartus_sh -t build_de25_soc.tcl
 quartus_syn de25_soc && quartus_fit de25_soc && quartus_asm de25_soc
 
 # 2. Linux
-./linux/build_de25_linux.sh          # SOF=... QPDS_BRANCH=... to override
+./linux/build_de25_linux.sh
 ```
 
-Outputs land in `linux/build_output/`: `bl31.bin`, `u-boot.itb`,
-`spl/u-boot-spl-dtb.hex`, `Image`, `socfpga_agilex5_de25.dtb`,
-`initramfs.cpio`, `sdcard.img`.
+Outputs in `linux/build_output/` (sizes from a real run):
+
+| file | ~size | from |
+|------|------:|------|
+| `bl31.bin` | 60 KB | ARM Trusted Firmware, `PLAT=agilex5` |
+| `u-boot.itb` | 830 KB | U-Boot proper (FIT, contains BL31) |
+| `spl/u-boot-spl-dtb.hex` | 530 KB | first-stage loader → goes in the JIC |
+| `Image` | 48 MB | Linux kernel (arm64 `defconfig` + fragment) |
+| `socfpga_agilex5_de25.dtb` | 23 KB | this repo's Linux DT |
+| `initramfs.cpio` | 7 MB | toybox `mkroot` rootfs |
+| `sdcard.img` | 96 MB | FAT32: `Image` + `.dtb` + `u-boot.itb` + `initramfs.cpio` |
 
 ## Boot media
 

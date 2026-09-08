@@ -78,6 +78,10 @@ export CROSS_COMPILE="${CROSS_PREFIX}"
 # ships ${CROSS_COMPILE}gcc, so provide a cc alias on PATH.
 mkdir -p "${OUT}/ccshim"
 ln -sf "$(command -v ${CROSS_PREFIX}gcc)" "${OUT}/ccshim/${CROSS_PREFIX}cc"
+for t in strip objcopy objdump ld ar nm ranlib; do
+    src="$(command -v ${CROSS_PREFIX}${t} || true)"
+    [[ -n "${src}" ]] && ln -sf "${src}" "${OUT}/ccshim/${CROSS_PREFIX}${t}"
+done
 export PATH="${OUT}/ccshim:${PATH}"
 echo ">> toolchain: $(command -v ${CROSS_PREFIX}gcc)  ($(${CROSS_PREFIX}gcc -dumpversion))"
 

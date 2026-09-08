@@ -154,7 +154,8 @@ from this project. The fabric register block still works exactly as in the
 
 A first-cut Linux build (`build_de25_linux.sh` + a bridge-free device tree,
 modelled on Altera's roll-your-own GSRD script) is in
-[`linux/`](linux/README.md) — not yet hardware-tested.
+[`linux/`](linux/README.md). It builds end to end (ATF + U-Boot + kernel +
+toybox initramfs + `sdcard.img`); not yet booted on hardware.
 
 ## Pinout
 
