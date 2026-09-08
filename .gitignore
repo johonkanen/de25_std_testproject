@@ -1,0 +1,32 @@
+# Quartus build output
+dni/
+qdb/
+db/
+incremental_db/
+output_files/
+tmp-clearbox/
+.qsys_edit/
+*.qws
+*.rpt
+*.summary
+*.pin
+*.sof
+*.pof
+*.jdi
+*.sld
+*.qdf
+c5_pin_model_dump.txt
+serv_req_info.txt
+de25_uart.qsf
+de25_uart.qpf
+
+# simulation
+sim/work/
+sim/*.o
+sim/*.fst
+sim/*.vcd
+sim/*.ghw
+
+# python
+__pycache__/
+*.pyc
