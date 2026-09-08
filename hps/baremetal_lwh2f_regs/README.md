@@ -59,11 +59,35 @@ over UART1, and **none of it has changed the hang**:
    itself works) `CR0 = 0x00000000` - **SMMU_EN clear**. Per that same
    reference test's own conditional logic, the mailbox handshake is not
    needed when SMMU is disabled, so this is ruled out too.
+5. **The actual Agilex 5-specific bridge-enable sequence, not the
+   generic one.** Found via
+   [`Ignitarium-Software/freertos-socfpga`](https://github.com/Ignitarium-Software/freertos-socfpga)
+   - its `samples/bridge/lwhps2fpga_bridge.c` uses `LWH2F_BASE =
+   0x20000000` too (**independent confirmation the address is right** -
+   this is Intel's own sample, not derived from anything in this
+   project), and its bridge enable goes through an SMC call to ATF
+   (`SIP_SMC_HPS_SET_BRIDGES`). Chasing that into this project's own
+   locally-built ATF source
+   (`linux/build_output/arm-trusted-firmware/plat/intel/soc/common/soc/socfpga_reset_manager.c`,
+   `socfpga_bridges_enable()`) found it has a **separate, more elaborate
+   code path specifically `#if PLATFORM_MODEL == PLAT_SOCFPGA_AGILEX5`**
+   - `baremetal-drivers`' `bridge_helper.cpp` (item 1 above) turns out to
+   implement ATF's simpler `#else` (non-Agilex5, older SoCFPGA
+   generations) path instead. Agilex 5's is a full flush cycle: request
+   the handshake and wait for the ack to **assert** (not clear), assert
+   reset again, clear the request, clear the ack (write-1-to-clear), only
+   then deassert reset and enable in the system manager - reimplemented
+   in `lwh2f_bridge_enable()` to match. On hardware: the ack **never
+   asserts** (timed out; ATF's own code tolerates this same timeout and
+   continues regardless, so this implementation does too) - board still
+   hangs at the identical point afterward.
 
-Every one of the four items above was independently confirmed correct or
-inapplicable, and the board still hangs on the register-1 self-test read
-- banner prints (now including the debug trace for all four), then
-silence, exactly like the very first wrong-address guess did.
+Every one of the five items above was independently confirmed correct,
+inapplicable, or (item 5) implemented exactly per Intel's own Agilex
+5-specific reference and still made no difference. The board hangs on
+the register-1 self-test read - banner prints (now including the debug
+trace for all five), then silence, exactly like the very first
+wrong-address guess did.
 `axi_lwh2f_bridge.vhd`'s read path has a 7-cycle watchdog that returns 0
 if a request reaches it but nothing answers within the FPGA fabric - so
 a multi-second hang, rather than that quick built-in timeout, means the
@@ -72,15 +96,45 @@ all. `de25_soc_top.vhd`'s port wiring from `hps_subsystem`'s
 `lwhps2fpga_*` ports through to `axi_lwh2f_bridge.vhd` was re-checked by
 hand and looks correct (signal directions and names all match).
 
-That leaves either the physical address itself still suspect (despite
-being given directly rather than guessed - possibly it needs combining
-with another base, or there's windowing/pagination this test doesn't
-do), or a NOC-level permission/routing gate that isn't exposed anywhere
-in `hps/baremetal-drivers` - which, between `bridge_helper.cpp`,
-`noc_firewall.h` and the SMMU driver, has now been checked about as far
-as it documents itself going. Recovering from every hang so far has just
-been a JTAG reprogram with a known-good image; nothing else on the board
-has been affected.
+That the address matches Intel's own `freertos-socfpga` sample exactly
+rules out address confusion as the cause. What's left is either a
+NOC-level permission/routing gate that isn't exposed in any of
+`hps/baremetal-drivers`, `noc_firewall.h`, the SMMU driver, or ATF's own
+reset-manager source (all now checked about as far as they document
+themselves), or - more likely, given `freertos-socfpga`'s own sample only
+actually works reached *through ATF's SMC handler* rather than by poking
+these registers directly from non-secure bare-metal code - something in
+Agilex 5's boot chain that only ATF (running at EL3, or otherwise
+privileged in a way this bare-metal test isn't) can set up, with no
+non-secure/bare-metal equivalent documented anywhere found so far.
+Recovering from every hang so far has just been a JTAG reprogram with a
+known-good image; nothing else on the board has been affected.
+
+## Running the real thing instead: `freertos-socfpga`
+
+[`Ignitarium-Software/freertos-socfpga`](https://github.com/Ignitarium-Software/freertos-socfpga)
+has a genuine, Intel-published, presumably-working `lwhps2fpga_bridge_sample()`
+(`samples/bridge/`) - not a reimplementation guessed from register
+definitions the way everything above is. Running it directly, rather
+than continuing to reverse-engineer its effect in bare-metal C, is
+feasible in principle:
+
+- This project already has ATF (`arm-trusted-firmware`) built from
+  `linux/build_de25_linux.sh` - `freertos-socfpga`'s bridge sample needs
+  BL31 running underneath it to handle the `SIP_SMC_HPS_SET_BRIDGES` SMC
+  call its bridge driver makes, and that's already available.
+- It is a **materially bigger undertaking** than anything else in this
+  directory, though: FreeRTOS would need to become `bl33` (replacing
+  U-Boot in the existing chain, or added as a second boot path), the
+  sample's board support needs porting to this project's exact
+  `hps_subsystem.qsys` pin-mux/handoff (not the stock GHRD the sample
+  presumably targets), and the sample loads its FPGA bitstream itself
+  from an SD card FAT filesystem via `fpga_manager` at runtime (a
+  `core.rbf`, 8.3-filename-limited) - a different flow from this
+  project's all-in-one JTAG `.sof` load, needing either adaptation or an
+  SD card prepared to match.
+- Not yet attempted here - this section exists to record that it's a
+  real, considered option, not to claim it's done.
 
 ## Register map
 

@@ -75,68 +75,101 @@ static void uart_set_divisor(uintptr_t base, uint32_t divisor) {
 #define RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK 0x00000200U
 #define SYS_MGR_FPGA_BRIDGE_CTRL_LWSOC2FPGA_EN 0x00000002U
 
+/* ~1ms-ish busy delay - no timer device opened in this minimal test, and
+ * these are ATF's own settling margins, not tight protocol timing, so an
+ * approximate/generous wait is fine. */
+static void busy_delay(void) {
+    for (volatile uint32_t i = 0; i < 300000U; i++) {
+    }
+}
+
+static uint32_t rstmgr_get(int32_t rstmgr_handle, int32_t op) {
+    uint32_t v = 0;
+    (void)rstmgr_ioctl(rstmgr_handle, op, (uintptr_t)&v, sizeof(v));
+    return v;
+}
+
 /* Bring the LWH2F bridge itself out of reset and enable it in the system
- * manager - the LWSOC2FPGA-only subset of baremetal-drivers'
- * bridge_helper.cpp bridge_enable() (which also does SOC2FPGA/F2SOC/
- * F2SDRAM via SDM mailbox + SMMU machinery this test doesn't use, since
- * those bridges are disabled in hps_subsystem.qsys). In the normal boot
- * chain ATF's agilex5_handoff.c does this before Linux/U-Boot ever runs;
- * running bare-metal with no ATF, nobody does it unless we do - out of
- * reset by default, the bridge silently drops every AXI transaction
- * (an unanswered ARM load just stalls forever - see this project's
- * README for what that looked like before this function existed). */
+ * manager, using the sequence Intel's own arm-trusted-firmware uses for
+ * Agilex 5 specifically (plat/intel/soc/common/soc/socfpga_reset_manager.c
+ * socfpga_bridges_enable(), guarded #if PLATFORM_MODEL ==
+ * PLAT_SOCFPGA_AGILEX5 - not the same, simpler protocol
+ * baremetal-drivers' bridge_helper.cpp implements, which turns out to
+ * match ATF's #else branch for older/non-Agilex5 SoCFPGA generations
+ * instead). Found via freertos-socfpga
+ * (github.com/Ignitarium-Software/freertos-socfpga)'s
+ * samples/bridge/lwhps2fpga_bridge.c, which pointed at ATF's SMC handler
+ * for its own enable_lwhps2fpga_bridge() call.
+ *
+ * Unlike the generic protocol (assert reset once, clear the ack/req
+ * handshake, deassert), Agilex 5's is a full flush cycle: request the
+ * handshake and WAIT FOR THE ACK TO ASSERT (not clear) before touching
+ * reset at all, re-assert reset, clear the request, clear the ack
+ * (write-1-to-clear), THEN deassert reset - only then enable in the
+ * system manager. In the normal boot chain ATF does this before Linux/
+ * U-Boot/FreeRTOS ever runs; running bare-metal with no ATF, nobody does
+ * it unless we do. */
 static void lwh2f_bridge_enable(int32_t rstmgr_handle, int32_t sysmgr_handle, int32_t dbg_fd) {
     uint32_t param = 0;
-    uint32_t param_req = 0;
-    uint32_t param_ack = 0;
 
-    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST, (uintptr_t)&param, sizeof(param));
+    uint32_t brgmodrst = rstmgr_get(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST);
     send_str(dbg_fd, "brgmodrst = 0x");
-    send_hex_u32(dbg_fd, param);
+    send_hex_u32(dbg_fd, brgmodrst);
     send_str(dbg_fd, "\r\n");
-    if (!(param & RST_MGR_BRGMODRST_LWSOC2FPGA)) {
+    if (!(brgmodrst & RST_MGR_BRGMODRST_LWSOC2FPGA)) {
         send_str(dbg_fd, "LWSOC2FPGA already out of reset\r\n");
         return;
     }
 
-    /* De-assert the bridge module reset */
+    /* 1. Request the handshake (set, not clear) */
+    param = rstmgr_get(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_HDSKREQ);
+    param |= RST_MGR_HDSKREQ_LWSOC2FPGAFLUSHREQ;
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_HDSKREQ, (uintptr_t)&param, sizeof(param));
+    busy_delay();
+
+    /* 2. Poll HDSKACK until it ASSERTS (not clears) */
+    uint32_t i, ack = 0;
+    for (i = 0; i < 3000000U; i++) {
+        ack = rstmgr_get(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_HDSKACK);
+        if (ack & RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK) {
+            break;
+        }
+    }
+    send_str(dbg_fd, "hdskack assert poll: ");
+    send_str(dbg_fd, (i < 3000000U) ? "asserted, iters=0x" : "TIMED OUT, iters=0x");
+    send_hex_u32(dbg_fd, i);
+    send_str(dbg_fd, " ack=0x");
+    send_hex_u32(dbg_fd, ack);
+    send_str(dbg_fd, "\r\n");
+    busy_delay();
+
+    /* 3. Assert reset (again, explicitly) */
+    param = rstmgr_get(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST);
+    param |= RST_MGR_BRGMODRST_LWSOC2FPGA;
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_BRGMODRST, (uintptr_t)&param, sizeof(param));
+    busy_delay();
+
+    /* 4. Clear the handshake request */
+    param = rstmgr_get(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_HDSKREQ);
+    param &= ~RST_MGR_HDSKREQ_LWSOC2FPGAFLUSHREQ;
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_HDSKREQ, (uintptr_t)&param, sizeof(param));
+    busy_delay();
+
+    /* 5. Clear the ack (write-1-to-clear) */
+    param = RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK;
+    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_HDSKACK, (uintptr_t)&param, sizeof(param));
+    busy_delay();
+
+    /* 6. Deassert reset */
+    param = rstmgr_get(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST);
     param &= ~RST_MGR_BRGMODRST_LWSOC2FPGA;
     (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_BRGMODRST, (uintptr_t)&param, sizeof(param));
-    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST, (uintptr_t)&param, sizeof(param));
+    param = rstmgr_get(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_BRGMODRST);
     send_str(dbg_fd, "brgmodrst after deassert = 0x");
     send_hex_u32(dbg_fd, param);
     send_str(dbg_fd, "\r\n");
 
-    /* Clear the flush ack, then the flush request (idle handshake) */
-    param_ack = RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK;
-    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_HDSKACK, (uintptr_t)&param_ack, sizeof(param_ack));
-
-    (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_HDSKREQ, (uintptr_t)&param_req, sizeof(param_req));
-    send_str(dbg_fd, "hdskreq = 0x");
-    send_hex_u32(dbg_fd, param_req);
-    send_str(dbg_fd, "\r\n");
-    if (param_req & RST_MGR_HDSKREQ_LWSOC2FPGAFLUSHREQ) {
-        param_req &= ~RST_MGR_HDSKREQ_LWSOC2FPGAFLUSHREQ;
-        (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_SET_HDSKREQ, (uintptr_t)&param_req, sizeof(param_req));
-    }
-
-    /* Wait for the ack to clear - bounded busy-poll, no timer device
-     * opened in this minimal test. */
-    uint32_t i;
-    for (i = 0; i < 1000000U; i++) {
-        (void)rstmgr_ioctl(rstmgr_handle, (int32_t)IOCTL_RSTMGR_GET_HDSKACK, (uintptr_t)&param_ack, sizeof(param_ack));
-        if (!(param_ack & RST_MGR_HDSKACK_LWSOC2FPGAFLUSHACK)) {
-            break;
-        }
-    }
-    send_str(dbg_fd, "hdskack poll: ");
-    send_str(dbg_fd, (i < 1000000U) ? "cleared, iters=0x" : "TIMED OUT, iters=0x");
-    send_hex_u32(dbg_fd, i);
-    send_str(dbg_fd, " final ack=0x");
-    send_hex_u32(dbg_fd, param_ack);
-    send_str(dbg_fd, "\r\n");
-
-    /* Enable the bridge in the system manager */
+    /* 7. Enable the bridge in the system manager */
     (void)sysmgr_ioctl(sysmgr_handle, (int32_t)IOCTL_SYSMGR_GET_FPGA_BRIDGE_CTRL, (uintptr_t)&param, sizeof(param));
     send_str(dbg_fd, "fpga_bridge_ctrl before = 0x");
     send_hex_u32(dbg_fd, param);
