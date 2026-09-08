@@ -74,16 +74,17 @@ Agilex 5 boots HPS-first: the **SPL + FPGA bitstream go in a JIC** (QSPI),
 the **kernel + rootfs go on the SD card**.
 
 ```
-quartus_pfg -c output_files/de25_soc.sof linux/build_output/de25_soc.jic \
-    -o device=MT25QU02G -o flash_loader=A5ED013BB32AE4SCS \
-    -o hps_path=linux/build_output/u-boot-socfpga/spl/u-boot-spl-dtb.hex \
-    -o mode=ASX4 -o hps=1
+./linux/make_jic.sh          # -> linux/build_output/de25_soc.jic (verified: 0 errors)
 ```
-Confirm `-o device=` against the DE25-Standard's QSPI flash part
-(`~/dev/de25_std/Datasheet/QSPI Flash/`). Then:
+
+`make_jic.sh` runs `quartus_pfg` for the DE25-Standard's **Micron MT25QU512**
+QSPI flash (`~/dev/de25_std/Datasheet/QSPI Flash/`) and device
+`A5ED013BB32AE4SCS`. Then:
 
 1. `dd` `sdcard.img` to the SD card
-2. `quartus_pgm -c 1 -m jtag -o "pvi;linux/build_output/de25_soc.jic"`
+2. attach the board (on WSL2, `usbipd attach` the on-board USB-Blaster II —
+   see [`../program.sh`](../program.sh)), then
+   `quartus_pgm -c 1 -m jtag -o "pvi;linux/build_output/de25_soc.jic"`
 3. set MSEL for QSPI + HPS-first per the DE25-Standard manual §"Set the MSEL"
 4. power-cycle; console on the HPS UART (CP2105) @ 115200
 

@@ -3,6 +3,5 @@ library ieee;
 
 package git_hash_pkg is
 
-    -- placeholder - run ./write_githash.sh to stamp the real commit hash
-    constant git_hash : std_logic_vector(31 downto 0) := x"00000000";
+    constant git_hash : std_logic_vector(31 downto 0) := x"3fd8085f";
 end package;
