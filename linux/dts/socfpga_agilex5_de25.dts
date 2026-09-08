@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Linux device tree for the Terasic DE25-Standard (Agilex 5 SoC),
- * matching the minimal `de25_soc` FPGA build in this repo:
- *   HPS peripherals: EMAC0 (RGMII+MDIO), SD/MMC 4-bit, UART1 console,
- *                    USB0, I2C1, SPIM0.
- *   FPGA<->HPS bridges: DISABLED - so there are deliberately NO
- *   soc2fpga / lwsoc2fpga / fpga2sdram device nodes here.  The base
- *   fpga-region / fpga-mgr from socfpga_agilex5.dtsi stay (they are
- *   passive until an overlay loads a bitstream).
+ * matching the `de25_soc` FPGA build in this repo (hps/hps_subsystem.qsys):
+ *   HPS peripherals: EMAC0 (RGMII+MDIO), SD/MMC 4-bit, UART1 console, I2C1.
+ *   No USB0 / SPIM0 in this pin mux (unlike the DE25-Nano's) - don't
+ *   enable &usb0 / &spi0, they aren't routed to any pins.
+ *   FPGA<->HPS bridges: H2F / F2SDRAM / F2H(ACE5-Lite) disabled. LWH2F is
+ *   enabled on the FPGA side (hps/README.md) but there is deliberately no
+ *   soc2fpga / lwsoc2fpga device node here yet - nothing in the fabric is
+ *   listening on it.  The base fpga-region / fpga-mgr from
+ *   socfpga_agilex5.dtsi stay (passive until an overlay loads a bitstream).
  *
  * FIRST CUT - derived from Terasic's socfpga_agilex5_de25_nano.dts.
  * Verify against the DE25-Standard schematic before trusting on HW:
  *   - Ethernet PHY MDIO address (KSZ9031RNX; assumed 1 here)
  *   - RGMII skew / any board strapping
  *   - SD card-detect / write-protect GPIO (none wired here)
- *   - USB0: USB3300 ULPI PHY + USB251xb hub reset (not modelled)
  */
 
 #include "socfpga_agilex5.dtsi"
@@ -122,15 +123,10 @@
 	/* on-board I2C devices (accelerometer, etc.) - add per schematic */
 };
 
-&spi0 {
-	status = "okay";			/* SPIM0 (HPS pin mux) */
-};
-
-&usb0 {
-	status = "okay";
-	dr_mode = "host";
-	disable-over-current;
-};
+/*
+ * SPIM0 and USB0 are not in this build's HPS pin mux (see hps/README.md) -
+ * leave &spi0 / &usb0 at their dtsi default (disabled).
+ */
 
 &smmu {
 	status = "okay";

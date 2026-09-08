@@ -163,19 +163,8 @@ set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_ENET_TX_DATA[0]
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_ENET_TX_DATA[1]
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_ENET_TX_DATA[2]
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_ENET_TX_DATA[3]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_GPIO[0]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_GPIO[1]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_GSENSOR_INT
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_I2C_SCL
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_I2C_SDA
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_KEY
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_BK
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_D_C
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_RST_n
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_SPIM_CLK
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_SPIM_MOSI
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_SPIM_SS
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LED
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_SD_CLK
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_SD_CMD
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_SD_DATA[0]
@@ -184,18 +173,6 @@ set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_SD_DATA[2]
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_SD_DATA[3]
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_UART_RX
 set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_UART_TX
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_CLK
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[0]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[1]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[2]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[3]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[4]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[5]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[6]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DATA[7]
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_DIR
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_NXT
-set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_USB_STP
 set_location_assignment PIN_AG123 -to HPS_CLK_25
 set_location_assignment PIN_D124  -to HPS_ENET_MDC
 set_location_assignment PIN_F124  -to HPS_ENET_MDIO
@@ -211,19 +188,8 @@ set_location_assignment PIN_M132  -to HPS_ENET_TX_DATA[0]
 set_location_assignment PIN_AD134 -to HPS_ENET_TX_DATA[1]
 set_location_assignment PIN_J134  -to HPS_ENET_TX_DATA[2]
 set_location_assignment PIN_AG120 -to HPS_ENET_TX_DATA[3]
-set_location_assignment PIN_T127  -to HPS_GPIO[0]
-set_location_assignment PIN_Y132  -to HPS_GPIO[1]
-set_location_assignment PIN_B134  -to HPS_GSENSOR_INT
 set_location_assignment PIN_K127  -to HPS_I2C_SCL
 set_location_assignment PIN_M127  -to HPS_I2C_SDA
-set_location_assignment PIN_K124  -to HPS_KEY
-set_location_assignment PIN_H127  -to HPS_LCM_BK
-set_location_assignment PIN_P124  -to HPS_LCM_D_C
-set_location_assignment PIN_T124  -to HPS_LCM_RST_n
-set_location_assignment PIN_F127  -to HPS_LCM_SPIM_CLK
-set_location_assignment PIN_Y124  -to HPS_LCM_SPIM_MOSI
-set_location_assignment PIN_AB124 -to HPS_LCM_SPIM_SS
-set_location_assignment PIN_Y127  -to HPS_LED
 set_location_assignment PIN_D132  -to HPS_SD_CLK
 set_location_assignment PIN_AB132 -to HPS_SD_CMD
 set_location_assignment PIN_E135  -to HPS_SD_DATA[0]
@@ -232,15 +198,3 @@ set_location_assignment PIN_AA135 -to HPS_SD_DATA[2]
 set_location_assignment PIN_V127  -to HPS_SD_DATA[3]
 set_location_assignment PIN_AB127 -to HPS_UART_RX
 set_location_assignment PIN_M124  -to HPS_UART_TX
-set_location_assignment PIN_W135  -to HPS_USB_CLK
-set_location_assignment PIN_AK115 -to HPS_USB_DATA[0]
-set_location_assignment PIN_U134  -to HPS_USB_DATA[1]
-set_location_assignment PIN_R134  -to HPS_USB_DATA[2]
-set_location_assignment PIN_AG115 -to HPS_USB_DATA[3]
-set_location_assignment PIN_N135  -to HPS_USB_DATA[4]
-set_location_assignment PIN_AK120 -to HPS_USB_DATA[5]
-set_location_assignment PIN_N134  -to HPS_USB_DATA[6]
-set_location_assignment PIN_T132  -to HPS_USB_DATA[7]
-set_location_assignment PIN_W134  -to HPS_USB_DIR
-set_location_assignment PIN_AL120 -to HPS_USB_NXT
-set_location_assignment PIN_U135  -to HPS_USB_STP

@@ -1,57 +1,85 @@
-# hps/ — Agilex 5 HPS + HPS-EMIF for the DE25-Standard
+# hps/ — Agilex 5 HPS subsystem for the DE25-Standard
 
-A minimal HPS subsystem for `de25_soc_top`: the Agilex 5 hard processor
-system plus its DDR4 EMIF, with **every FPGA↔HPS bridge disabled**.
+A Platform Designer system, `hps_subsystem.qsys`, instantiated directly as
+a VHDL `component` in `de25_soc_top.vhd` — the Agilex 5 HPS plus its DDR4
+EMIF. No wrapper-generator script: Platform Designer wires
+`intel_agilex_5_soc_0 ↔ emif_io96b_hps_0` internally, the same way
+[`de25_nano_testproject`](https://github.com/johonkanen/de25_nano_testproject)
+and the `datacenter_peak_shaving` DE25-Standard build do it.
 
-## What's vendored
+## Where this came from
 
-| file | origin (DE25 GHRD `Demonstration/SoC_FPGA/GHRD/`) |
-|------|--------------------------------------------------|
-| `ip/hps_subsys/agilex_hps.ip` | `hps_subsys/ip/hps_subsys/agilex_hps.ip`, **then patched** (see below) |
-| `ip/qsys_top/emif_io96b_hps.ip` | `hps_subsys/ip/qsys_top/emif_io96b_hps.ip`, verbatim |
-| `hps_ddr4_pins.tcl` | the 123 `HPS_*` / `DDR4_*` pin + IO-standard lines from `golden_top.qsf` |
+Vendored verbatim from `datacenter_peak_shaving/fpga/agilex/de25/ip/hps/`
+(same author, same board, `device = A5ED013BB32AE4SCS`, DDR4), then trimmed:
 
-`agilex_hps.ip` keeps the GHRD's DE25 pin mux — EMAC0 (RGMII + MDIO),
-SD/MMC 4-bit, UART1 console, USB0, I2C1, SPIM0, the LCD/gsensor GPIOs.
+| file | origin |
+|------|--------|
+| `hps_subsystem.qsys` | vendored, then `iopll_0` removed (see below) |
+| `ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip` | vendored verbatim — HPS pin mux: EMAC0 (RGMII+MDIO), SD/MMC 4-bit, UART1, I2C1 |
+| `ip/hps_subsystem/hps_subsystem_emif_io96b_hps_0.ip` | vendored verbatim — DDR4 EMIF |
+| `ip/hps_subsystem/hps_subsystem_s10_user_rst_clkgate_0.ip` | vendored verbatim — Reset Release IP (`ninit_done`) |
+| `hps_pins.tcl` | the 100 `HPS_*`/`DDR4_*` pin + IO-standard lines this pin mux actually drives, from `golden_top.qsf` |
 
-## The bridge patch
+No `USB0`/`SPIM0`/LCD-GPIO in this pin mux (unlike the earlier `hps_min.v`
+generator this replaces) — smaller HPS config, smaller pin file.
 
-[`disable_bridges.py`](disable_bridges.py) flips five parameters in
-`agilex_hps.ip` so the HPS has no AXI ports into the fabric:
+## Bridges — kept as vendored, same as the sibling projects
+
+| bridge | state |
+|---|---|
+| `H2F` (128-bit) | disabled |
+| `LWH2F` (32-bit, lightweight) | **enabled**, exported as `lwhps2fpga` |
+| `F2SDRAM` | disabled |
+| `F2H` (ACE5-Lite) | disabled |
+| F2H interrupts | enabled, exported as `fpga2hps_interrupt_irq0/1` |
+
+`lwhps2fpga` and the F2H interrupts are exported from `hps_subsystem` but
+**not yet wired to anything in the fabric** — `de25_soc_top.vhd` ties the
+manager inputs idle (`awready`/`wready`/`arready` low, response channels
+zero) and the interrupts to `0`. The register block in `de25_uart_top`
+still only talks over its own GPIO UART. Point `lwhps2fpga` at
+`fpga_interconnect` (or any AXI-Lite slave) to make it reachable from HPS
+software.
+
+## Removing `iopll_0`
+
+The vendored `hps_subsystem.qsys` also had an `altera_iopll` (`iopll_0`,
+50 MHz → `main_clock`/`modulator_clock`) feeding a flying-capacitor
+modulator in the source project. This project's fabric runs on the DE25's
+50 MHz oscillator directly, so it's unused — dropped with
+[`trim_hps_subsystem.tcl`](trim_hps_subsystem.tcl):
 
 ```
-H2F_Width          128 -> 0     LWH2F_Width        32 -> 0
-f2s_data_width     256 -> 0     f2sdram_data_width 256 -> 0
-F2H_IRQ_Enable    true -> false
+qsys-script --package-version=25.1 --new-quartus-project=_t \
+    --script=trim_hps_subsystem.tcl --search-path='ip/hps_subsystem,$'
+rm -f *.qpf *.qsf; rm -rf _t*
 ```
 
-This is why the design **cannot use the stock Terasic GHRD Linux image** —
-that image's device tree maps the h2f / lwh2f bridge regions. Boot this one
-with your own device tree (no `soc/bridge@*` nodes) and its own U-Boot SPL
-handoff, regenerated from this project's Quartus output.
+`remove_instance`/`remove_interface` work on this `.qsys` even though its
+component boundaries are cached ("generic component") — unlike editing an
+instance's *parameters* (e.g. the bridge widths), which requires editing
+the `.ip` file directly (not attempted here; the vendored bridge config was
+already what this project wants).
 
-## Regenerating
+## Building
+
+Nothing to run by hand: `build_de25_soc.tcl` sets
+`PROJECT_IP_REGENERATION_POLICY ALWAYS_REGENERATE_IP`, so `quartus_syn`
+regenerates `hps_subsystem` itself from the `QSYS_FILE`/`IP_FILE`
+assignments. To inspect the generated component port list (e.g. after
+re-vendoring), run once:
 
 ```
-python3 hps/disable_bridges.py          # idempotent; safe to re-run
-qsys-generate hps/ip/hps_subsys/agilex_hps.ip   --synthesis=VHDL --part=A5ED013BB32AE4SCS
-qsys-generate hps/ip/qsys_top/emif_io96b_hps.ip --synthesis=VHDL --part=A5ED013BB32AE4SCS
-python3 hps/gen_hps_min.py              # writes hps_min.v from the two *_inst.v
+qsys-generate hps_subsystem.qsys --synthesis=VHDL --part=A5ED013BB32AE4SCS --search-path='ip/hps_subsystem,$'
 ```
+which writes `hps_subsystem/hps_subsystem_inst.vhd` — the source for the
+`component hps_subsystem` declaration in `de25_soc_top.vhd`. Generated
+trees (`hps_subsystem/`, `ip/hps_subsystem/hps_subsystem_*_0/`) are
+git-ignored; only the `.qsys` and `.ip` files are tracked.
 
-The generated IP trees (`ip/*/*/`) are git-ignored; only the `.ip` source
-and the scripts are tracked.
+## Status
 
-## `hps_min.v`
-
-[`gen_hps_min.py`](gen_hps_min.py) generates [`hps_min.v`](hps_min.v): it
-instantiates `agilex_hps` + `emif_io96b_hps` and wires the internal
-`io96b0_to_hps` NoC bus (62 signals, AXI4 + AXI4-Lite) between them by
-matching the role names in each IP's `*_inst.v`. The EMIF supplies the NoC
-clock/reset, and the HPS clocks itself from `HPS_CLK_25`, so `hps_min`
-needs no fabric clock or reset — it exposes only the physical `HPS_*` /
-`DDR4_*` pins plus `h2f_reset` / `emac0_app_rst` (left unconnected at the
-top).
-
-`hps_min.v` is tracked so the project builds after `qsys-generate` without
-re-running the generator; re-run it only if an IP's port list changes.
+Synthesizes as part of `de25_soc_top` (see the top-level README's build
+log). Same hardware-verification status as before this refactor: the
+fabric side has been programmed and confirmed on a real DE25-Standard; the
+HPS/EMIF bring-up itself has not — see the top-level README.

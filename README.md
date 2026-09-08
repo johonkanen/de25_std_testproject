@@ -125,32 +125,32 @@ Expected tail: `==== ALL CHECKS PASSED ====`.
 
 ## SoC variant — `de25_soc`
 
-A second top level, `de25_soc_top.v`, adds the **Agilex 5 HPS** alongside
+A second top level, `de25_soc_top.vhd`, adds the **Agilex 5 HPS** alongside
 the unchanged fabric register block:
 
-- `hps_min` (`hps/hps_min.v`, generated) — HPS + HPS-EMIF **DDR4**, with
-  **EMAC0** (gigabit, RGMII + MDIO), **SD/MMC** (4-bit), UART1 console,
-  USB0, I2C1, SPIM0. Every FPGA↔HPS bridge is **disabled** — see
-  [hps/README.md](hps/README.md).
+- `hps_subsystem` (`hps/hps_subsystem.qsys`, a Platform Designer system
+  instantiated as a VHDL component — no wrapper-generator script) —
+  HPS + HPS-EMIF **DDR4**, with **EMAC0** (gigabit, RGMII + MDIO),
+  **SD/MMC** (4-bit), UART1 console, I2C1. `H2F`/`F2SDRAM`/`F2H(ACE5-Lite)`
+  are disabled; `LWH2F` (lightweight HPS-to-FPGA) and the F2H interrupts
+  stay enabled but unwired — see [hps/README.md](hps/README.md).
 - `de25_uart_top` — the fabric UART register block, exactly as above, on
   `GPIO_D[0]/[1]`, independent of the HPS.
 
 ```
-python3 hps/disable_bridges.py
-qsys-generate hps/ip/hps_subsys/agilex_hps.ip   --synthesis=VHDL --part=A5ED013BB32AE4SCS
-qsys-generate hps/ip/qsys_top/emif_io96b_hps.ip --synthesis=VHDL --part=A5ED013BB32AE4SCS
-python3 hps/gen_hps_min.py
 quartus_sh  -t build_de25_soc.tcl
-quartus_syn de25_soc          # verified: 0 errors (26.1.1)
-quartus_fit de25_soc         # EMIF fit is long (~30-45 min), not run here
+quartus_ipgenerate de25_soc   # regenerates hps_subsystem (ALWAYS_REGENERATE_IP)
+quartus_syn de25_soc          # verified: 0 errors, 0 warnings (26.1.1)
+quartus_fit de25_soc          # verified: 0 errors, timing met
 quartus_sta de25_soc
-quartus_asm de25_soc
+quartus_asm de25_soc          # verified: 0 errors — .sof programmed on hardware
 ```
 
-Because the bridges are off, `de25_soc` does **not** boot the stock Terasic
-GHRD SD image — it needs its own device tree and U-Boot SPL handoff built
-from this project. The fabric register block still works exactly as in the
-`de25_uart` build.
+Because the H2F/F2SDRAM/F2H bridges are off and the pin mux differs from
+the GHRD's, `de25_soc` does **not** boot the stock Terasic GHRD SD image —
+it needs its own device tree and U-Boot SPL handoff built from this
+project (see [`linux/`](linux/README.md)). The fabric register block
+still works exactly as in the `de25_uart` build.
 
 A first-cut Linux build (`build_de25_linux.sh` + a bridge-free device tree,
 modelled on Altera's roll-your-own GSRD script) is in

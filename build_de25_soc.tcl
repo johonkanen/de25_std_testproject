@@ -3,17 +3,16 @@
 # Target board: Terasic DE25-Standard (Agilex 5 A5ED013BB32AE4SCS)
 #
 # Contents:
-#   * hps_min      - Agilex 5 HPS + HPS-EMIF DDR4, EMAC0 / SD-MMC / UART1 /
-#                    USB0 / I2C1 / SPIM0.  All FPGA<->HPS bridges disabled.
+#   * hps_subsystem - Agilex 5 HPS + HPS-EMIF DDR4, EMAC0 / SD-MMC / UART1 /
+#                    I2C1.  H2F / F2SDRAM / F2H(ACE5-Lite) disabled; LWH2F
+#                    and the F2H interrupts stay enabled (unwired for now).
+#                    Platform Designer system: hps/hps_subsystem.qsys +
+#                    hps/ip/hps_subsystem/*.ip.  See hps/README.md.
 #   * de25_uart_top - the fabric UART + fpga_interconnect register block
 #                    (unchanged), on GPIO_D[0]/[1].
 #
-# Prerequisites - generate the HPS/EMIF IP once (agilex_hps.ip already has
-# the bridges disabled; hps_min.v is generated from the two *_inst.v):
-#
-#   qsys-generate hps/ip/hps_subsys/agilex_hps.ip   --synthesis=VHDL --part=A5ED013BB32AE4SCS
-#   qsys-generate hps/ip/qsys_top/emif_io96b_hps.ip --synthesis=VHDL --part=A5ED013BB32AE4SCS
-#   python3 hps/gen_hps_min.py
+# PROJECT_IP_REGENERATION_POLICY ALWAYS_REGENERATE_IP below means
+# quartus_syn regenerates hps_subsystem itself - no manual qsys-generate.
 #
 # Build:
 #   quartus_sh  -t build_de25_soc.tcl
@@ -22,9 +21,9 @@
 #   quartus_sta de25_soc
 #   quartus_asm de25_soc
 #
-# NOTE: with the FPGA<->HPS bridges disabled this design does NOT match the
-# stock Terasic GHRD Linux image - it needs its own device tree / bootloader
-# handoff.
+# NOTE: this does NOT match the stock Terasic GHRD Linux image (different
+# HPS pin mux / no OCM / no debug bridges) - it needs its own device tree /
+# bootloader handoff.
 # ------------------------------------------------------------------------
 
 package require ::quartus::project
@@ -52,7 +51,6 @@ set_global_assignment -name ORIGINAL_QUARTUS_VERSION 25.1.0
 set_global_assignment -name LAST_QUARTUS_VERSION "26.1.1 Pro Edition"
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name VHDL_INPUT_VERSION VHDL_2019
-set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005
 set_global_assignment -name OPTIMIZATION_MODE BALANCED
 set_global_assignment -name BOARD default
 
@@ -78,12 +76,14 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/communications.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/git_hash_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/de25_uart_top.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/de25_soc_top.vhd
 
 # ---------------------------------------------------------- SoC HDL + IP
-set_global_assignment -name VERILOG_FILE $this_file_path/hps/hps_min.v
-set_global_assignment -name VERILOG_FILE $this_file_path/de25_soc_top.v
-set_global_assignment -name QIP_FILE $this_file_path/hps/ip/hps_subsys/agilex_hps/agilex_hps.qip
-set_global_assignment -name QIP_FILE $this_file_path/hps/ip/qsys_top/emif_io96b_hps/emif_io96b_hps.qip
+set_global_assignment -name QSYS_FILE $this_file_path/hps/hps_subsystem.qsys
+set_global_assignment -name IP_FILE $this_file_path/hps/ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip
+set_global_assignment -name IP_FILE $this_file_path/hps/ip/hps_subsystem/hps_subsystem_emif_io96b_hps_0.ip
+set_global_assignment -name IP_FILE $this_file_path/hps/ip/hps_subsystem/hps_subsystem_s10_user_rst_clkgate_0.ip
+set_global_assignment -name PROJECT_IP_REGENERATION_POLICY ALWAYS_REGENERATE_IP
 
 # ---------------------------------------------------------- constraints
 set_global_assignment -name SDC_FILE $this_file_path/de25_soc.sdc
@@ -129,8 +129,9 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to uart_txd
 set_instance_assignment -name CURRENT_STRENGTH_NEW 6MA    -to uart_txd
 
 # ------------------------------------------------ HPS + DDR4 pins (GHRD)
-# 123 pins x {location, IO_STANDARD}, incl. HPS_CLK_25 / DDR4_REFCLK_p / DDR4_RZQ
-source $this_file_path/hps/hps_ddr4_pins.tcl
+# 100 pins x {location, IO_STANDARD} for the peripherals this pin mux
+# actually drives (EMAC0, SD/MMC, UART1, I2C1, DDR4) - no USB0/SPIM0/LCM.
+source $this_file_path/hps/hps_pins.tcl
 
 # --------------------------------------------------------------- commit
 export_assignments

@@ -24,11 +24,13 @@ de25_soc.qpf
 *.qpf.bak
 
 # generated HPS/EMIF IP - keep the .ip source + scripts, drop the trees
-hps/ip/hps_subsys/agilex_hps/
-hps/ip/qsys_top/emif_io96b_hps/
+hps/hps_subsystem/
+hps/ip/hps_subsystem/hps_subsystem_*_0/
+hps/dni/
+hps/qdb/
+hps/IpUpgradeLog.xml
 hps/**/*.qpf
 hps/**/*.qsf
-!hps/hps_ddr4_pins.tcl
 
 # simulation
 sim/work/
@@ -43,3 +45,4 @@ __pycache__/
 
 # roll-your-own linux build
 linux/build_output/
+*.BAK.ip
