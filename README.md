@@ -109,8 +109,16 @@ every register. Exit status 0 = all passed.
 | 6 | `SW[9:0]` slide switches (RO) |
 | 7 | `KEY[3:0]` push-buttons, 1 = pressed (RO) |
 | 8 | free-running core-clock uptime counter (RO) |
+| 9 | fan target speed — MAX6650 KTACH register (R/W), resets to a quiet default |
+| 10 | fan tach0/rpm — bits 7:0 raw Tach0Count, bits 23:8 rpm (RO) |
+| 11 | fan link status — bits 7:0 Config readback, bit 8 init_done, bit 9 i2c_error (RO) |
 
 `LEDR[9]` is a ~1 Hz heartbeat so the board shows life with nothing attached.
+
+Registers 9–11 drive the board's MAX6650 fan controller over its own I2C
+bus (`source/fan_control/`) — see [docs/de25_std_fan.md](docs/de25_std_fan.md)
+for the register values, the KTACH speed encoding, and how to trim the
+startup speed.
 
 ## Simulate
 

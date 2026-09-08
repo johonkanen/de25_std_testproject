@@ -32,9 +32,22 @@
 --   addr 6 : SW[9:0] slide switches         (read only)
 --   addr 7 : KEY[3:0] push-buttons, 1 = pressed  (read only)
 --   addr 8 : free-running core-clock uptime counter  (read only)
+--   addr 9 : fan target, MAX6650 KTACH register  (read / write)
+--   addr 10: fan tach0/rpm - bits 7:0 raw Tach0Count, bits 23:8 rpm  (RO)
+--   addr 11: fan link status - bits 7:0 Config readback, bit 8
+--            init_done, bit 9 i2c_error                        (RO)
 --
 -- LEDR[8:0] follow addr-5 bits 8..0; LEDR[9] is a ~1 Hz heartbeat so the
 -- board shows life without a terminal attached.
+--
+-- Fan control (see source/fan_control/max6650_fan_control.vhd): the
+-- board's MAX6650 fan-speed controller hangs off its own I2C bus
+-- (FPGA_I2C_SCLK / FPGA_I2C_SDAT), and register 9 is its target speed
+-- (KTACH encoding, not linear RPM - see that file's header). It resets to
+-- g_fan_min_rpm converted to KTACH, so the fan comes up at a low,
+-- vendor-chosen speed instead of whatever Terasic's own board-management
+-- IP (not present here) would otherwise drive it to, and stays there
+-- until something writes a new value.
 ------------------------------------------------------------------------
 library ieee;
     use ieee.std_logic_1164.all;
@@ -46,6 +59,14 @@ entity uart_register_block is
         g_clock_divider : natural := 434
         -- power-on reset length in core-clock cycles (~21 ms at 50 MHz).
         ;g_por_cycles   : natural := 1_048_575
+        -- fan speed after reset, in RPM - converted to the MAX6650's KTACH
+        -- encoding for register 9's reset value (see
+        -- source/fan_control/max6650_fan_control.vhd's header for the
+        -- formula and why 3500). The single source of truth: also passed
+        -- straight into max6650_fan_control's own g_min_rpm below, so the
+        -- two stay in sync.
+        ;g_fan_min_rpm  : natural := 3500
+        ;g_fan_kscale   : natural := 2
     );
     port (
         core_clock   : in  std_logic
@@ -97,6 +118,11 @@ entity uart_register_block is
         -- only by a full JTAG reprogram) even though axi_lwh2f_bridge.vhd
         -- itself was verified correct in isolation.
         ;axi_bridge_reset : out std_logic := '1'
+
+        -- MAX6650 fan controller I2C bus, open-drain (see
+        -- source/fan_control/max6650_fan_control.vhd)
+        ;FPGA_I2C_SCL : inout std_logic
+        ;FPGA_I2C_SDA : inout std_logic
     );
 end entity uart_register_block;
 
@@ -130,6 +156,26 @@ architecture rtl of uart_register_block is
     -- double-flop the async inputs before they reach the register file
     signal sw_meta,  sw_sync  : std_logic_vector(9 downto 0) := (others => '0');
     signal key_meta, key_sync : std_logic_vector(3 downto 0) := (others => '1');
+
+    ------------------------------------------------------------------
+    -- fan control (see source/fan_control/max6650_fan_control.vhd)
+    -- KTACH register value for g_fan_min_rpm - same formula as that
+    -- entity's own c_ktach_min_rpm, duplicated here because the register
+    -- (and its reset value) lives in this file, one level up from the
+    -- driver. g_fan_min_rpm is the single generic both read from.
+    constant c_fan_ktach_default : natural :=
+        ((992 * g_fan_kscale) / (g_fan_min_rpm / 60)) - 1;
+
+    signal fan_ktach_register  : std_logic_vector(31 downto 0) :=
+        std_logic_vector(to_unsigned(c_fan_ktach_default, 32));
+    signal fan_rpm             : std_logic_vector(15 downto 0);
+    signal fan_tach0           : std_logic_vector(7 downto 0);
+    signal fan_config_readback : std_logic_vector(7 downto 0);
+    signal fan_init_done       : std_logic;
+    signal fan_i2c_error       : std_logic;
+
+    signal i2c_sda_low : std_logic;
+    signal i2c_scl_low : std_logic;
 
 begin
 
@@ -195,6 +241,11 @@ begin
                 std_logic_vector(resize(unsigned(not key_sync), 32)));   -- KEY is active low
             connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 8,
                 std_logic_vector(uptime_counter));
+            connect_data_to_address(bus_from_communications, bus_from_top_uart, 9, fan_ktach_register);
+            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 10,
+                x"00" & fan_rpm & fan_tach0);
+            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 11,
+                (31 downto 10 => '0') & fan_i2c_error & fan_init_done & fan_config_readback);
 
             -- ---- LWH2F (AXI) master - same registers ----
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 1, x"0000DE25");
@@ -211,6 +262,11 @@ begin
                 std_logic_vector(resize(unsigned(not key_sync), 32)));
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 8,
                 std_logic_vector(uptime_counter));
+            connect_data_to_address(bus_from_axi, bus_from_top_axi, 9, fan_ktach_register);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 10,
+                x"00" & fan_rpm & fan_tach0);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 11,
+                (31 downto 10 => '0') & fan_i2c_error & fan_init_done & fan_config_readback);
 
             uptime_counter <= uptime_counter + 1;
 
@@ -222,6 +278,7 @@ begin
                 read_counter          <= (others => '0');
                 led_register          <= (others => '0');
                 uptime_counter        <= (others => '0');
+                fan_ktach_register    <= std_logic_vector(to_unsigned(c_fan_ktach_default, 32));
                 bus_to_communications <= init_fpga_interconnect;
                 bus_to_axi            <= init_fpga_interconnect;
             end if;
@@ -279,6 +336,36 @@ begin
     );
 
 ------------------------------------------------------------------------
-    axi_bridge_reset <= system_reset;
+    axi_bridge_reset <= not system_reset;
+
+------------------------------------------------------------------------
+-- MAX6650 fan controller, on its own I2C bus - see
+-- source/fan_control/max6650_fan_control.vhd and this file's header.
+-- Tri-stated here exactly like the i2c_master_pkg.vhd header documents:
+-- only ever driven low or released, never driven high.
+------------------------------------------------------------------------
+    FPGA_I2C_SCL <= '0' when i2c_scl_low = '1' else 'Z';
+    FPGA_I2C_SDA <= '0' when i2c_sda_low = '1' else 'Z';
+
+    u_fan_control : entity work.max6650_fan_control
+    generic map (
+        g_clock_hz => 50_000_000
+        ,g_min_rpm => g_fan_min_rpm
+        ,g_kscale  => g_fan_kscale
+    )
+    port map (
+        clock            => core_clock
+        ,reset           => system_reset
+        ,ktach_in        => fan_ktach_register(7 downto 0)
+        ,rpm_out         => fan_rpm
+        ,tach0_out       => fan_tach0
+        ,config_readback => fan_config_readback
+        ,ktach_out       => open
+        ,init_done       => fan_init_done
+        ,i2c_error       => fan_i2c_error
+        ,sda_in          => FPGA_I2C_SDA
+        ,sda_low         => i2c_sda_low
+        ,scl_low         => i2c_scl_low
+    );
 
 end rtl;

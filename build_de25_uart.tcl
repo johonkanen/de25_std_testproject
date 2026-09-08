@@ -81,6 +81,11 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/
 # git hash constant (refresh with ./write_githash.sh)
 set_global_assignment -name VHDL_FILE $this_file_path/git_hash_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
+
+# MAX6650 fan controller (see source/fan_control/)
+set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/i2c_master_pkg.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/max6650_fan_control.vhd
+
 set_global_assignment -name VHDL_FILE $this_file_path/uart_register_block.vhd
 
 # bring-up top level
@@ -125,6 +130,10 @@ set_location_assignment PIN_BR62  -to LEDR[9]
 set_location_assignment PIN_BK31  -to uart_rxd
 set_location_assignment PIN_BE43  -to uart_txd
 
+# MAX6650 fan controller I2C bus (from Demonstration/SoC_FPGA/GHRD/golden_top.qsf)
+set_location_assignment PIN_BF120 -to FPGA_I2C_SCL
+set_location_assignment PIN_BH118 -to FPGA_I2C_SDA
+
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to CLOCK0_50    -entity de25_uart_top
 set_instance_assignment -name IO_STANDARD "1.2-V"        -to CPU_RESET_n  -entity de25_uart_top
 set_instance_assignment -name IO_STANDARD "1.2-V"        -to KEY[0]       -entity de25_uart_top
@@ -153,6 +162,8 @@ set_instance_assignment -name IO_STANDARD "1.2-V"        -to LEDR[8]      -entit
 set_instance_assignment -name IO_STANDARD "1.2-V"        -to LEDR[9]      -entity de25_uart_top
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to uart_rxd     -entity de25_uart_top
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to uart_txd     -entity de25_uart_top
+set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SCL -entity de25_uart_top
+set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SDA -entity de25_uart_top
 
 set_instance_assignment -name CURRENT_STRENGTH_NEW 6MA -to uart_txd -entity de25_uart_top
 

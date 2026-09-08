@@ -32,6 +32,8 @@ entity de25_soc_top is
         LEDR          : out   std_logic_vector(9 downto 0);
         uart_rxd      : in    std_logic;                     -- GPIO_D[0]  (PIN_BK31)
         uart_txd      : out   std_logic;                     -- GPIO_D[1]  (PIN_BE43)
+        FPGA_I2C_SCL  : inout std_logic;                     -- PIN_BF120, MAX6650 fan (open-drain)
+        FPGA_I2C_SDA  : inout std_logic;                     -- PIN_BH118, MAX6650 fan (open-drain)
 
         -- ---- HPS ----
         HPS_CLK_25       : in    std_logic;
@@ -78,7 +80,9 @@ architecture rtl of de25_soc_top is
     component uart_register_block is
         generic (
             g_clock_divider : natural := 434;
-            g_por_cycles    : natural := 1_048_575
+            g_por_cycles    : natural := 1_048_575;
+            g_fan_min_rpm   : natural := 3500;
+            g_fan_kscale    : natural := 2
         );
         port (
             core_clock   : in  std_logic;
@@ -112,7 +116,10 @@ architecture rtl of de25_soc_top is
             axi_rvalid  : out std_logic;
             axi_rready  : in  std_logic := '0';
 
-            axi_bridge_reset : out std_logic
+            axi_bridge_reset : out std_logic;
+
+            FPGA_I2C_SCL : inout std_logic;
+            FPGA_I2C_SDA : inout std_logic
         );
     end component uart_register_block;
 
@@ -277,7 +284,10 @@ begin
             axi_rvalid  => lwh2f_rvalid,
             axi_rready  => lwh2f_rready,
 
-            axi_bridge_reset => lwh2f_bridge_reset
+            axi_bridge_reset => lwh2f_bridge_reset,
+
+            FPGA_I2C_SCL => FPGA_I2C_SCL,
+            FPGA_I2C_SDA => FPGA_I2C_SDA
         );
 
     ------------------------------------------------------------------

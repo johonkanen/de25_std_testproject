@@ -13,6 +13,8 @@
 --   KEY[3:0]     ...        1.2-V          push-buttons, active low
 --   uart_rxd     PIN_BK31   3.3-V LVCMOS   GPIO_D[0]   (board TX -> FPGA RX)
 --   uart_txd     PIN_BE43   3.3-V LVCMOS   GPIO_D[1]   (FPGA TX -> board RX)
+--   FPGA_I2C_SCL PIN_BF120  3.3-V LVCMOS   MAX6650 fan controller (open-drain)
+--   FPGA_I2C_SDA PIN_BH118  3.3-V LVCMOS   MAX6650 fan controller (open-drain)
 --
 -- The DE25-Standard has no FPGA-fabric UART wired to its on-board CP2105
 -- USB bridge (that port goes to the HPS), so the UART is broken out to two
@@ -46,6 +48,8 @@ entity de25_uart_top is
         ;LEDR         : out std_logic_vector(9 downto 0)     -- red user LEDs
         ;uart_rxd     : in  std_logic                        -- GPIO_D[0]  (PIN_BK31)
         ;uart_txd     : out std_logic                        -- GPIO_D[1]  (PIN_BE43)
+        ;FPGA_I2C_SCL : inout std_logic                      -- PIN_BF120, open-drain
+        ;FPGA_I2C_SDA : inout std_logic                      -- PIN_BH118, open-drain
     );
 end entity de25_uart_top;
 
@@ -67,6 +71,8 @@ begin
         ,uart_txd    => uart_txd
         -- lwhps2fpga (axi_*) ports left unconnected - no HPS in this build,
         -- every input defaults to idle so the bridge never requests anything.
+        ,FPGA_I2C_SCL => FPGA_I2C_SCL
+        ,FPGA_I2C_SDA => FPGA_I2C_SDA
     );
 
 end rtl;
