@@ -56,7 +56,7 @@ the **kernel + rootfs go on the SD card**.
 
 ```
 quartus_pfg -c output_files/de25_soc.sof linux/build_output/de25_soc.jic \
-    -o device=MT25QU128 -o flash_loader=A5ED013BB32AE4SCS \
+    -o device=MT25QU02G -o flash_loader=A5ED013BB32AE4SCS \
     -o hps_path=linux/build_output/u-boot-socfpga/spl/u-boot-spl-dtb.hex \
     -o mode=ASX4 -o hps=1
 ```

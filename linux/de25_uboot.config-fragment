@@ -6,7 +6,10 @@
 #   root=/dev/mmcblk0p3 rootwait
 # in CONFIG_BOOTCOMMAND (see linux/README.md).
 
-CONFIG_DEFAULT_DEVICE_TREE="socfpga_agilex5_de25"
+# upstream QPDS26.1.1 u-boot already ships a working DE25-Nano DT; the
+# DE25-Standard shares the HPS/SD/UART/QSPI setup, so reuse it for SPL/U-Boot
+# (only the Linux kernel gets this repo's socfpga_agilex5_de25.dts).
+CONFIG_DEFAULT_DEVICE_TREE="socfpga_agilex5_de25_nano"
 CONFIG_BOOTFILE="Image"
 
 # no NAND / UBI on this board

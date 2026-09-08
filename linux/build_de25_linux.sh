@@ -17,7 +17,7 @@
 #
 # Then combine the SPL with the FPGA bitstream:
 #   quartus_pfg -c ../output_files/de25_soc.sof de25_soc.jic \
-#       -o device=MT25QU128 -o flash_loader=A5ED013BB32AE4SCS \
+#       -o device=MT25QU02G -o flash_loader=A5ED013BB32AE4SCS \
 #       -o hps_path=linux/build_output/u-boot-socfpga/spl/u-boot-spl-dtb.hex \
 #       -o mode=ASX4 -o hps=1
 # (adjust -o device= to the DE25-Standard QSPI part; see docs.)
@@ -88,12 +88,9 @@ if [[ ! -d u-boot-socfpga ]]; then
     git clone --depth 1 -b "${QPDS_REF}" "${UBOOT_REPO}" u-boot-socfpga
 fi
 pushd u-boot-socfpga >/dev/null
-    # inject the DE25-Standard board files (thin U-Boot DT, not the Linux one)
-    cp "${HERE}/dts/socfpga_agilex5_de25.uboot.dts"    arch/arm/dts/socfpga_agilex5_de25.dts
-    cp "${HERE}/dts/socfpga_agilex5_de25-u-boot.dtsi"  arch/arm/dts/
-    grep -q socfpga_agilex5_de25 arch/arm/dts/Makefile || \
-        sed -i 's/\(socfpga_agilex5_socdk.dtb\)/\1 \\\n\tsocfpga_agilex5_de25.dtb/' arch/arm/dts/Makefile
-
+    # U-Boot uses the upstream socfpga_agilex5_de25_nano DT (see the config
+    # fragment) - nothing to inject here.
+    git checkout -- . && git clean -fdq
     ln -sf "${OUT}/bl31.bin" bl31.bin
     make mrproper
     make socfpga_agilex5_defconfig
@@ -109,9 +106,10 @@ if [[ ! -d linux-socfpga ]]; then
     git clone --depth 1 -b "${QPDS_REF}" "${LINUX_REPO}" linux-socfpga
 fi
 pushd linux-socfpga >/dev/null
+    git checkout -- . && git clean -fdq
     cp "${HERE}/dts/socfpga_agilex5_de25.dts" arch/arm64/boot/dts/intel/
-    grep -q socfpga_agilex5_de25 arch/arm64/boot/dts/intel/Makefile || \
-        sed -i 's/\(socfpga_agilex5_socdk.dtb\)/\1\ndtb-$(CONFIG_ARCH_INTEL_SOCFPGA) += socfpga_agilex5_de25.dtb/' \
+    grep -qE 'socfpga_agilex5_de25\.dtb' arch/arm64/boot/dts/intel/Makefile || \
+        sed -i 's|\(socfpga_agilex5_socdk\.dtb\)|\1\ndtb-$(CONFIG_ARCH_INTEL_SOCFPGA) += socfpga_agilex5_de25.dtb|' \
             arch/arm64/boot/dts/intel/Makefile
     make defconfig
     ./scripts/kconfig/merge_config.sh -O . .config "${HERE}/de25_kernel.config-fragment"
@@ -145,7 +143,7 @@ echo
 echo "  next:"
 echo "  1. combine SPL + FPGA into a JIC (adjust -o device= to the board QSPI part):"
 echo "       quartus_pfg -c ${SOF} de25_soc.jic \\"
-echo "           -o device=MT25QU128 -o flash_loader=A5ED013BB32AE4SCS \\"
+echo "           -o device=MT25QU02G -o flash_loader=A5ED013BB32AE4SCS \\"
 echo "           -o hps_path=${OUT}/spl/u-boot-spl-dtb.hex -o mode=ASX4 -o hps=1"
 echo "  2. flash sdcard.img to the SD card, program the JIC, set MSEL for"
 echo "     QSPI+HPS-first, power-cycle.  Console = HPS UART (CP2105) @115200."
