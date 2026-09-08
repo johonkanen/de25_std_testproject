@@ -36,7 +36,9 @@ OUT="${HERE}/build_output"
 JOBS="$(nproc)"
 
 # ---- pinned sources (match your Quartus / QPDS release) --------------------
-QPDS_BRANCH="${QPDS_BRANCH:-QPDS25.3.1_REL_GSRD_PR}"
+# QPDS_REF is a git TAG on all three altera-fpga repos; use the one that
+# matches your Quartus version (QPDS26.1.1_REL_GSRD_PR for Quartus 26.1.1).
+QPDS_REF="${QPDS_REF:-QPDS26.1.1_REL_GSRD_PR}"
 ATF_REPO="https://github.com/altera-fpga/arm-trusted-firmware"
 UBOOT_REPO="https://github.com/altera-fpga/u-boot-socfpga"
 LINUX_REPO="https://github.com/altera-fpga/linux-socfpga"
@@ -45,6 +47,10 @@ TOOLCHAIN_URL="https://landley.net/toybox/downloads/binaries/toolchains/latest/a
 TOOLCHAIN_DIR="aarch64-linux-musleabi-cross"
 
 SOF="${SOF:-${HERE}/../output_files/de25_soc.sof}"
+
+# mformat/mcopy: from PATH, or set MTOOLS_BIN to a dir holding them
+[[ -n "${MTOOLS_BIN:-}" ]] && export PATH="${MTOOLS_BIN}:${PATH}"
+command -v mformat >/dev/null || { echo "ERROR: mtools (mformat/mcopy) not found; apt install mtools, or set MTOOLS_BIN"; exit 1; }
 
 mkdir -p "${OUT}"
 cd "${OUT}"
@@ -62,14 +68,14 @@ export CROSS_COMPILE=aarch64-linux-musleabi-
 
 # ---- ARM Trusted Firmware ----------------------------------------------
 if [[ ! -d arm-trusted-firmware ]]; then
-    git clone --depth 1 -b "${QPDS_BRANCH}" "${ATF_REPO}" arm-trusted-firmware
+    git clone --depth 1 -b "${QPDS_REF}" "${ATF_REPO}" arm-trusted-firmware
 fi
 make -C arm-trusted-firmware -j"${JOBS}" PLAT=agilex5 bl31
 cp arm-trusted-firmware/build/agilex5/release/bl31.bin "${OUT}/bl31.bin"
 
 # ---- U-Boot -----------------------------------------------------------
 if [[ ! -d u-boot-socfpga ]]; then
-    git clone --depth 1 -b "${QPDS_BRANCH}" "${UBOOT_REPO}" u-boot-socfpga
+    git clone --depth 1 -b "${QPDS_REF}" "${UBOOT_REPO}" u-boot-socfpga
 fi
 pushd u-boot-socfpga >/dev/null
     # inject the DE25-Standard board files
@@ -90,7 +96,7 @@ popd >/dev/null
 
 # ---- Linux kernel ---------------------------------------------------
 if [[ ! -d linux-socfpga ]]; then
-    git clone --depth 1 -b "${QPDS_BRANCH}" "${LINUX_REPO}" linux-socfpga
+    git clone --depth 1 -b "${QPDS_REF}" "${LINUX_REPO}" linux-socfpga
 fi
 pushd linux-socfpga >/dev/null
     cp "${HERE}/dts/socfpga_agilex5_de25.dts" arch/arm64/boot/dts/intel/
