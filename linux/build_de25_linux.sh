@@ -43,8 +43,12 @@ ATF_REPO="https://github.com/altera-fpga/arm-trusted-firmware"
 UBOOT_REPO="https://github.com/altera-fpga/u-boot-socfpga"
 LINUX_REPO="https://github.com/altera-fpga/linux-socfpga"
 TOYBOX_REPO="https://github.com/landley/toybox.git"
-TOOLCHAIN_URL="https://landley.net/toybox/downloads/binaries/toolchains/latest/aarch64-linux-musleabi-cross.tar.xz"
-TOOLCHAIN_DIR="aarch64-linux-musleabi-cross"
+# ARM GNU aarch64 bare-metal-capable toolchain (has the LTO plugin that
+# ATF's release build needs; the landley musl toolchain does not).
+# Point CROSS_TOOLCHAIN at an existing install to skip the download.
+TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+TOOLCHAIN_DIR="arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu"
+CROSS_PREFIX="aarch64-none-linux-gnu-"
 
 SOF="${SOF:-${HERE}/../output_files/de25_soc.sof}"
 
@@ -58,19 +62,25 @@ cd "${OUT}"
 export ARCH=arm64
 
 # ---- toolchain -----------------------------------------------------------
-if [[ ! -x "${TOOLCHAIN_DIR}/bin/aarch64-linux-musleabi-gcc" ]]; then
-    echo ">> fetching toolchain"
-    wget -q --show-progress -O tc.tar.xz "${TOOLCHAIN_URL}"
-    tar -xf tc.tar.xz && rm tc.tar.xz
+if [[ -n "${CROSS_TOOLCHAIN:-}" && -x "${CROSS_TOOLCHAIN}/bin/${CROSS_PREFIX}gcc" ]]; then
+    TC_BIN="${CROSS_TOOLCHAIN}/bin"
+else
+    if [[ ! -x "${TOOLCHAIN_DIR}/bin/${CROSS_PREFIX}gcc" ]]; then
+        echo ">> fetching toolchain"
+        wget -q --show-progress -O tc.tar.xz "${TOOLCHAIN_URL}"
+        tar -xf tc.tar.xz && rm tc.tar.xz
+    fi
+    TC_BIN="${OUT}/${TOOLCHAIN_DIR}/bin"
 fi
-export PATH="${OUT}/${TOOLCHAIN_DIR}/bin:${PATH}"
-export CROSS_COMPILE=aarch64-linux-musleabi-
+export PATH="${TC_BIN}:${PATH}"
+export CROSS_COMPILE="${CROSS_PREFIX}"
+echo ">> toolchain: $(command -v ${CROSS_PREFIX}gcc)  ($(${CROSS_PREFIX}gcc -dumpversion))"
 
 # ---- ARM Trusted Firmware ----------------------------------------------
 if [[ ! -d arm-trusted-firmware ]]; then
     git clone --depth 1 -b "${QPDS_REF}" "${ATF_REPO}" arm-trusted-firmware
 fi
-make -C arm-trusted-firmware -j"${JOBS}" PLAT=agilex5 bl31
+make -C arm-trusted-firmware -j"${JOBS}" PLAT=agilex5 ENABLE_LTO=0 bl31
 cp arm-trusted-firmware/build/agilex5/release/bl31.bin "${OUT}/bl31.bin"
 
 # ---- U-Boot -----------------------------------------------------------
@@ -114,8 +124,8 @@ popd >/dev/null
 if [[ ! -d toybox ]]; then git clone --depth 1 "${TOYBOX_REPO}" toybox; fi
 pushd toybox >/dev/null
     make clean || true
-    CROSS_COMPILE=aarch64-linux-musleabi- make defconfig
-    CROSS_COMPILE=aarch64-linux-musleabi- mkroot/mkroot.sh
+    make defconfig
+    mkroot/mkroot.sh
     gzip -dc root/aarch64/initramfs.cpio.gz > "${OUT}/initramfs.cpio"
 popd >/dev/null
 
