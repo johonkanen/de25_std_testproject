@@ -1,10 +1,9 @@
 # Timing constraints for the DE25-Standard SoC bring-up build.
 #
-# The HPS-EMIF IP contributes its own generated SDC through the .qip; only
-# the board input clocks and the fabric async pins are constrained here.
+# The HPS-EMIF IP constrains its own DDR4_REFCLK_p through the .qip SDC, so
+# only the fabric board clock and the fabric async pins are set here.
 
-create_clock -name CLOCK0_50      -period 20.000                 [get_ports CLOCK0_50]
-create_clock -name EMIF_REF_CLOCK -period "150 MHz"              [get_ports DDR4_REFCLK_p]
+create_clock -name CLOCK0_50 -period 20.000 [get_ports CLOCK0_50]
 
 derive_clock_uncertainty
 
