@@ -88,8 +88,8 @@ if [[ ! -d u-boot-socfpga ]]; then
     git clone --depth 1 -b "${QPDS_REF}" "${UBOOT_REPO}" u-boot-socfpga
 fi
 pushd u-boot-socfpga >/dev/null
-    # inject the DE25-Standard board files
-    cp "${HERE}/dts/socfpga_agilex5_de25.dts"          arch/arm/dts/
+    # inject the DE25-Standard board files (thin U-Boot DT, not the Linux one)
+    cp "${HERE}/dts/socfpga_agilex5_de25.uboot.dts"    arch/arm/dts/socfpga_agilex5_de25.dts
     cp "${HERE}/dts/socfpga_agilex5_de25-u-boot.dtsi"  arch/arm/dts/
     grep -q socfpga_agilex5_de25 arch/arm/dts/Makefile || \
         sed -i 's/\(socfpga_agilex5_socdk.dtb\)/\1 \\\n\tsocfpga_agilex5_de25.dtb/' arch/arm/dts/Makefile
