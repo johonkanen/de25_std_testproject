@@ -57,8 +57,14 @@ entity uart_register_block is
     generic (
         -- core clock (Hz) / baud rate.  50 MHz / 115200 = 434.
         g_clock_divider : natural := 434
-        -- power-on reset length in core-clock cycles (~21 ms at 50 MHz).
-        ;g_por_cycles   : natural := 1_048_575
+        -- power-on reset length in core-clock cycles (~100 ms at 50 MHz).
+        -- Was ~21 ms (1_048_575); widened while chasing the LWH2F hang on
+        -- the chance the lwhps2fpga bridge hard macro (see axi_bridge_reset
+        -- below) needed longer to see the fabric clock/logic driving it
+        -- settle before its reset releases. Turned out not to be the fix
+        -- (axi_bridge_reset's own polarity was inverted, see below) - kept
+        -- at 100ms anyway as a bit of extra margin, since it's free.
+        ;g_por_cycles   : natural := 4_999_999
         -- fan speed after reset, in RPM - converted to the MAX6650's KTACH
         -- encoding for register 9's reset value (see
         -- source/fan_control/max6650_fan_control.vhd's header for the
@@ -338,7 +344,17 @@ begin
     );
 
 ------------------------------------------------------------------------
-    axi_bridge_reset <= not system_reset;
+    -- axi_bridge_reset is active-HIGH (see its declaration above and the
+    -- fan controller's `reset => system_reset` a few lines down) - unlike
+    -- `resetn` above it, it must NOT be inverted. It was: this held the
+    -- HPS's lwhps2fpga hard macro released during our own POR hold and
+    -- then asserted (permanently in reset) for the rest of normal
+    -- operation - the exact opposite of the intended "delay the release"
+    -- behaviour, and the real cause of the LWH2F hang chased across this
+    -- whole session (widening g_por_cycles never had a chance to help,
+    -- since the bridge was never actually held in reset during the delay
+    -- in the first place - see linux/README.md's session-status notes).
+    axi_bridge_reset <= system_reset;
 
 ------------------------------------------------------------------------
 -- MAX6650 fan controller, on its own I2C bus - see

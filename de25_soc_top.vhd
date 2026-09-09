@@ -80,7 +80,7 @@ architecture rtl of de25_soc_top is
     component uart_register_block is
         generic (
             g_clock_divider : natural := 434;
-            g_por_cycles    : natural := 1_048_575;
+            g_por_cycles    : natural := 4_999_999;  -- ~100 ms at 50 MHz
             g_fan_min_rpm   : natural := 1500;
             g_fan_kscale    : natural := 2
         );

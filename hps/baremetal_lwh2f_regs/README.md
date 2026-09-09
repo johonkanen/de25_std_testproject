@@ -9,7 +9,39 @@ approach as [`../baremetal_uart1_test`](../baremetal_uart1_test) — **no ATF,
 no U-Boot, no Linux, no SD card** — see that directory's README for the
 fuller account of the pin-mux / clkmgr bring-up shared by both.
 
-## ⚠️ Still hangs on real hardware - unresolved
+## ✅ The bridge itself is fixed and hardware-confirmed working (2026-09-09)
+
+The root cause was in this project's own RTL, not anything HPS-side:
+`de25_soc_top.vhd` drives `axi_bridge_reset` (the fabric-side reset for the
+HPS's own `lwhps2fpga` hard macro) with `not system_reset` - but that signal
+is **active-high** (see its declaration and the fan controller's
+`reset => system_reset` a few lines below it in `uart_register_block.vhd`),
+so it was inverted: the macro was released from reset instantly at
+configuration and then held in **permanent** reset for the rest of normal
+operation, regardless of any HPS-side software sequence or how long a
+power-on-reset delay was configured. Fixed by dropping the `not`. Confirmed
+on hardware immediately afterward from a live U-Boot prompt (Terasic's
+u-boot-socfpga fork, see `linux/README.md`):
+```
+=> bridge enable 0x2
+=> md.l 0x20000010 1
+20000010: 0000de25
+=> mw.l 0x20000030 0xcafef00d 1
+=> md.l 0x20000030 1
+20000030: cafef00d
+```
+register 1 (constant id), register 3 (loopback, write/read-back), and
+register 4 (read-strobe counter, incrementing across reads) all work
+exactly as they do over the fabric UART. See `linux/README.md`'s
+session-status notes for the full trail (including a real ATF bug found
+along the way - `agilex5_ddr.c`'s hardcoded 2GB DDR-size check - and how
+this was chased down via a full ATF+U-Boot+Linux boot, not this file).
+
+**This specific bare-metal test still hangs, for a separate, unresolved
+reason** - see below. The bridge is not the mystery anymore; something
+particular to running with no ATF at all still is.
+
+## ⚠️ This file's own test still hangs - unresolved (separate from the bridge bug above)
 
 `LWH2F_BASE` is `0x20000000`, given directly by the project owner from the
 Agilex 5 HPS TRM (an earlier guess, `0xF9000000` - the Stratix10/Agilex1
@@ -109,6 +141,41 @@ privileged in a way this bare-metal test isn't) can set up, with no
 non-secure/bare-metal equivalent documented anywhere found so far.
 Recovering from every hang so far has just been a JTAG reprogram with a
 known-good image; nothing else on the board has been affected.
+
+**Update, 2026-09-09**: the "something only ATF/EL3 can set up" theory above
+turned out to be wrong - see the fixed-and-confirmed section at the top of
+this file. The actual bug was a plain RTL reset-polarity inversion in this
+project's own `de25_soc_top.vhd`, nothing EL3/privilege-related at all - the
+"tried both polarities, identical hang both times" claim in item 3 above
+must have been testing under some other simultaneous issue, since the
+corrected polarity alone (no other change) fixed LWH2F access completely,
+confirmed from U-Boot.
+
+That leaves a genuinely separate question: **why does this bare-metal test
+specifically still hang** even with the bridge fixed? Two things ruled out
+so far:
+- **Not the fabric power-on-reset window.** `de25_soc_top.vhd` holds the
+  HPS's `lwhps2fpga` hard macro in fabric-side reset for ~100ms after FPGA
+  configuration (`g_por_cycles`), independent of HPS boot timing. This
+  test's own `lwh2f_bridge_enable()` sequence (dominated by an
+  always-timing-out, up-to-3,000,000-iteration hdskack poll) could
+  plausibly finish inside that window and dispatch its self-test read too
+  early, permanently hanging that one blocking AXI transaction. Added an
+  explicit ~150-200ms `long_busy_delay()` before the read to test this -
+  **made no difference**, reproducibly, across repeated tests (the delay is
+  still probably a real requirement, just not the whole story - left in).
+- **Not a flaky test harness.** The same binary was observed to both hang
+  and succeed-past-the-trace-line across back-to-back reprograms with zero
+  source changes early in this investigation, which looked like it might
+  explain everything - but repeated, patient (30-40s, single continuous
+  read window) testing confirms the hang past the debug trace is real and
+  reproducible, not a serial-port-timing artifact of how this was tested.
+
+Not yet root-caused. The bridge itself is proven working (U-Boot, this same
+FPGA bitstream) - what's left is specific to this bare-metal test's own
+environment (no ATF, EL3, whatever else genuinely differs from U-Boot's
+SMC-mediated enable beyond the sequence of register writes, which are now
+confirmed byte-for-byte identical to ATF's own Agilex5 path).
 
 ## Running the real thing instead: `freertos-socfpga`
 

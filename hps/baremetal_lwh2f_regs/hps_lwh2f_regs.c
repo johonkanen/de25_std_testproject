@@ -83,6 +83,27 @@ static void busy_delay(void) {
     }
 }
 
+/* Same idiom as busy_delay() above, just a caller-supplied iteration count -
+ * for the much longer wait needed before the first LWH2F transaction (see
+ * its call site). de25_soc_top.vhd holds the HPS's lwhps2fpga hard macro in
+ * FABRIC-side reset (axi_bridge_reset) for ~100ms after FPGA configuration,
+ * measured on the fabric clock - completely independent of how fast this
+ * function's own bridge_enable() sequence above finishes (dominated by the
+ * up-to-3,000,000-iteration hdskack poll timeout, which always times out on
+ * this board, but may still finish well inside that 100ms window). An AXI
+ * read dispatched while the macro is still held in fabric-side reset gets
+ * no response and hangs the CPU on that one blocking instruction forever -
+ * it can't "catch up" once the reset later clears, since that specific
+ * transaction never gets serviced. This was the real cause of this file's
+ * long-standing hang (a de25_soc_top.vhd reset-polarity bug meant this
+ * delay never actually held the macro in reset at all until that bug was
+ * fixed - see linux/README.md's session-status notes); wait well past it
+ * here. */
+static void long_busy_delay(uint32_t iters) {
+    for (volatile uint32_t i = 0; i < iters; i++) {
+    }
+}
+
 static uint32_t rstmgr_get(int32_t rstmgr_handle, int32_t op) {
     uint32_t v = 0;
     (void)rstmgr_ioctl(rstmgr_handle, op, (uintptr_t)&v, sizeof(v));
@@ -369,6 +390,18 @@ int main(void) {
     } else {
         send_str(uart1, "smmu_open failed\r\n");
     }
+
+    /* Necessary but NOT sufficient, empirically (see long_busy_delay()'s own
+     * comment and this file's README): with a genuine de25_soc_top.vhd
+     * reset-polarity bug fixed and this delay in place, LWH2F works
+     * perfectly from U-Boot (bridge enable + md.l), confirmed hardware -
+     * but this exact bare-metal sequence still hangs on the read below,
+     * reproducibly, across repeated tests. The bridge itself is proven
+     * working now; something else specific to bare-metal (no ATF, EL3,
+     * whatever else the real boot chain sets up before software ever runs)
+     * still gates it. Left in since it's still a real requirement, just
+     * not the whole story. */
+    long_busy_delay(60000000U);
 
     /* self-test: register 1 is the constant id, 0x0000DE25 */
     uint32_t id = *lwh2f_reg(1);

@@ -112,6 +112,55 @@ initramfs → shell in RAM.
   `hps/disable_bridges.py`, add the bridge back to the Qsys wiring and a
   `soc2fpga`/`lwsoc2fpga` node to the DT.
 
+## Session status (2026-09-09) — LWH2F root cause found and fixed
+
+The whole detour below (2026-09-08) was in service of testing LWH2F access
+from a full, privileged boot chain since a from-scratch bare-metal test
+kept hanging on it. Picking back up from that session's last lead (the FPGA
+reports itself config-ready, but nothing in the boot chain was calling the
+bridge-enable sequence): U-Boot has a builtin `bridge enable [mask]`
+command (`arch/arm/mach-socfpga/misc_soc64.c`'s `do_bridge_reset()`) that
+does this properly, gated on `is_fpga_config_ready()`. Using it from a live
+U-Boot prompt (`bridge enable 0x2` for LWH2F) cleared `RSTMGR_BRGMODRST`
+cleanly with no error — but reading the actual LWH2F register right after
+(`md.l 0x20000010 1`) still hung the board completely, identically to the
+original bare-metal symptom.
+
+That ruled out "missing software step" and pointed at this project's own
+RTL. `de25_soc_top.vhd` drives `axi_bridge_reset` — the fabric-side reset
+input to the HPS's own `lwhps2fpga` hard macro — with `not system_reset`.
+That signal is **active-high** (same file drives the fan controller's
+active-high `reset` port with plain `system_reset`, no inversion, a few
+lines below) — so it was inverted: the hard macro was released from reset
+instantly at FPGA configuration and then held in **permanent** reset for
+the entire rest of normal operation, the exact opposite of the intended
+"delay the release" behaviour. No amount of widening the power-on-reset
+counter (`g_por_cycles`, tried 21ms → 100ms) could ever have fixed this,
+since the signal being delayed was never actually reaching the macro's
+reset input as a reset assertion in the first place.
+
+Fix: `axi_bridge_reset <= system_reset;` (drop the `not`). Rebuilt,
+reprogrammed, and confirmed immediately from the same U-Boot prompt:
+```
+=> bridge enable 0x2
+=> md.l 0x20000010 1
+20000010: 0000de25
+=> mw.l 0x20000030 0xcafef00d 1
+=> md.l 0x20000030 1
+20000030: cafef00d
+```
+Register 1 (constant id), register 3 (loopback write/read-back), and
+register 4 (read-strobe counter, incrementing across reads) all work
+exactly as they do over the fabric UART. **The LWH2F bridge itself is
+fixed and hardware-confirmed working.**
+
+The *original* bare-metal test (`hps/baremetal_lwh2f_regs/`) still hangs on
+its own self-test read, even with the RTL fix and a generous extra delay
+added before that read — a separate, unresolved, bare-metal-specific issue
+now that the bridge itself is proven working elsewhere. See that
+directory's README for the full detail; not chased further this session in
+favor of getting the actual bridge fix documented and committed.
+
 ## Session status (2026-09-08)
 
 Long detour from the original LWH2F bare-metal-hang investigation, in
