@@ -3892,7 +3892,7 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="User0_clk_enable" type="bit">
           <ipxact:name>User0_clk_enable</ipxact:name>
           <ipxact:displayName>Enable User0 Clock</ipxact:displayName>
-          <ipxact:value>false</ipxact:value>
+          <ipxact:value>true</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="User1_clk_enable" type="bit">
           <ipxact:name>User1_clk_enable</ipxact:name>
@@ -3907,7 +3907,7 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="User0_clk_freq" type="real">
           <ipxact:name>User0_clk_freq</ipxact:name>
           <ipxact:displayName>H2F User0 Clock Desired Frequency</ipxact:displayName>
-          <ipxact:value>500.0</ipxact:value>
+          <ipxact:value>50.0</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="User1_clk_src_select" type="int">
           <ipxact:name>User1_clk_src_select</ipxact:name>

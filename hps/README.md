@@ -77,6 +77,65 @@ which writes `hps_subsystem/hps_subsystem_inst.vhd` — the source for the
 trees (`hps_subsystem/`, `ip/hps_subsystem/hps_subsystem_*_0/`) are
 git-ignored; only the `.qsys` and `.ip` files are tracked.
 
+## H2F User0 clock (HPS-generated free-running clock to fabric) - not yet wired
+
+The HPS IP has an "H2F User Clock" feature (`User0_clk_enable`/
+`User0_clk_freq` parameters in
+`ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip`, currently set to
+`true`/`50.0` MHz) - a dedicated, free-running clock the ARM cores' clock
+manager generates for FPGA fabric logic to use directly, independent of the
+board oscillator. Started wiring this up (2026-09-09) but hit a genuine
+tooling wall documented here so it isn't re-derived from scratch:
+
+- Editing the `.ip` file's parameters is correct (per this file's own
+  "editing an instance's parameters... requires editing the `.ip` file
+  directly" note above) and does take effect - regenerating that `.ip`
+  directly (`qsys-generate ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip
+  --synthesis=VHDL --part=A5ED013BB32AE4SCS`, after deleting its stale
+  generated output directory first to force a real regen) produces a real
+  new port, `h2f_user0_clk_clk`, on that sub-component.
+- **The problem**: `intel_agilex_5_soc_0` is a Platform Designer "Generic
+  Component" (`CLASS_NAME = altera_generic_component`) - its interface list,
+  as seen by the *system* (`hps_subsystem.qsys`, and hence by `de25_soc_top`
+  which instantiates `hps_subsystem`), is a fixed snapshot cached at
+  instance-creation time, not re-derived from the underlying `.ip` on
+  regeneration. None of `qsys-generate hps_subsystem.qsys`,
+  `reload_component_footprint`, `reload_ip_catalog`, or `load_component`
+  (all real `qsys-script` commands, all tried) refresh it - the new port
+  stays completely invisible at the system level no matter how many times
+  the sub-IP is regenerated.
+- The only lever left is the instance's `FILE` property (which `.ip` a
+  Generic Component instance is loaded from) - but it's **read-only**
+  through every scripting path tried: `set_instance_property` on the
+  existing instance, `set_instance_property` on a freshly `add_instance`'d
+  one (`add_instance <name> altera_generic_component 1.0` - 2 args is name+
+  type only, 3 args' third slot is a *version* string, not a file path, and
+  errors if it isn't a real registered version). `set_instance_parameter_value`
+  also doesn't work on this component type at all (`No parameter named X`,
+  even for parameters that definitely exist per the `.ip`'s own IP-XACT).
+- Conclusion: associating a Generic Component instance with an updated
+  `.ip` file appears to be a Platform Designer **GUI-only** action (whatever
+  the right-click/dialog workflow is for it isn't exposed as a scriptable
+  property at all) - not something achievable headlessly with the
+  `qsys-script`/`qsys-generate` command-line tools alone.
+- **Nothing was left in a broken state**: none of this touched
+  `hps_subsystem.qsys` (confirmed via `git diff` - zero changes, since no
+  attempt ever got far enough to call `save_system`). Only the `.ip` file's
+  two parameter values changed, which is inert (nothing currently reads
+  them into a build) until the interface actually gets exported.
+
+**To finish this**: open `hps_subsystem.qsys` in the Platform Designer GUI
+(not available in this headless dev environment), let it pick up the
+already-edited `.ip` file's new `h2f_user0_clk` interface, export it at the
+system level (same way `lwhps2fpga`/`hps_io`/etc. are already exported -
+see the interface list this file's own investigation dumped via
+`get_interfaces`/`get_instance_interfaces` for the exact existing pattern
+to match), `save_system`, then add the new `h2f_user0_clk_clk` port to
+`de25_soc_top.vhd`'s `component hps_subsystem` declaration and wire it to
+a small isolated test module (not the existing register file/LWH2F path -
+see the top-level README and this session's own discussion for why: no
+CDC infrastructure exists there today).
+
 ## Status
 
 Synthesizes as part of `de25_soc_top` (see the top-level README's build
