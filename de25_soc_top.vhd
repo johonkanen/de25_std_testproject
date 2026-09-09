@@ -9,6 +9,10 @@
 --                     over BOTH the fabric UART (GPIO_D[0]/[1]) and the
 --                     HPS's lwhps2fpga (LWH2F) AXI4 bridge - see
 --                     uart_register_block.vhd and axi_lwh2f_bridge.vhd.
+--   * h2f_user0_clk_heartbeat : proves out the HPS's dedicated free-running
+--                     H2F User0 clock (50 MHz, independent of CLOCK0_50) by
+--                     blinking GPIO_D[2] with it - deliberately isolated
+--                     from the register file above, see that file's header.
 --
 -- hps_subsystem is a Platform Designer system (hps/hps_subsystem.qsys +
 -- its per-instance .ip files) instantiated directly as a VHDL component -
@@ -34,6 +38,7 @@ entity de25_soc_top is
         uart_txd      : out   std_logic;                     -- GPIO_D[1]  (PIN_BE43)
         FPGA_I2C_SCL  : inout std_logic;                     -- PIN_BF120, MAX6650 fan (open-drain)
         FPGA_I2C_SDA  : inout std_logic;                     -- PIN_BH118, MAX6650 fan (open-drain)
+        H2F_CLK_TEST  : out   std_logic;                     -- GPIO_D[2] (PIN_BF29) - see h2f_user0_clk_heartbeat.vhd
 
         -- ---- HPS ----
         HPS_CLK_25       : in    std_logic;
@@ -211,9 +216,22 @@ architecture rtl of de25_soc_top is
             hps_io_i2c1_scl                          : inout std_logic                     := 'X';
             fpga2hps_interrupt_irq1_irq              : in    std_logic_vector(31 downto 0) := (others => 'X');
             fpga2hps_interrupt_irq0_irq              : in    std_logic_vector(31 downto 0) := (others => 'X');
-            ninit_done_ninit_done                    : out   std_logic
+            ninit_done_ninit_done                    : out   std_logic;
+            h2f_user0_clock_clk                      : out   std_logic
         );
     end component hps_subsystem;
+
+    component h2f_user0_clk_heartbeat is
+        port (
+            h2f_user0_clock : in  std_logic;
+            heartbeat_out   : out std_logic
+        );
+    end component h2f_user0_clk_heartbeat;
+
+    -- HPS's dedicated free-running H2F User0 clock (50 MHz, independent of
+    -- CLOCK0_50) - see hps/README.md's "H2F User0 clock" section and
+    -- h2f_user0_clk_heartbeat.vhd.
+    signal h2f_user0_clock : std_logic;
 
     signal ninit_done : std_logic;
 
@@ -390,7 +408,17 @@ begin
             fpga2hps_interrupt_irq0_irq                => (others => '0'),
             fpga2hps_interrupt_irq1_irq                => (others => '0'),
 
-            ninit_done_ninit_done                     => ninit_done
+            ninit_done_ninit_done                     => ninit_done,
+            h2f_user0_clock_clk                       => h2f_user0_clock
+        );
+
+    ------------------------------------------------------------------
+    -- H2F User0 clock test - see h2f_user0_clk_heartbeat.vhd
+    ------------------------------------------------------------------
+    u_h2f_user0_clk_heartbeat : component h2f_user0_clk_heartbeat
+        port map (
+            h2f_user0_clock => h2f_user0_clock,
+            heartbeat_out   => H2F_CLK_TEST
         );
 
 end architecture rtl;

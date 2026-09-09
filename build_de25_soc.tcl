@@ -84,6 +84,7 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/i2c_mas
 set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/max6650_fan_control.vhd
 
 set_global_assignment -name VHDL_FILE $this_file_path/uart_register_block.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/de25_soc_top.vhd
 
 # ---------------------------------------------------------- SoC HDL + IP
@@ -126,6 +127,10 @@ set_location_assignment PIN_BR62  -to LEDR[9]
 set_location_assignment PIN_BK31  -to uart_rxd
 set_location_assignment PIN_BE43  -to uart_txd
 
+# H2F User0 clock heartbeat test - GPIO_D[2] (see docs/de25_pinout.md and
+# h2f_user0_clk_heartbeat.vhd), from Demonstration/FPGA/golden_top/golden_top.qsf
+set_location_assignment PIN_BF29  -to H2F_CLK_TEST
+
 # MAX6650 fan controller I2C bus (from Demonstration/SoC_FPGA/GHRD/golden_top.qsf)
 set_location_assignment PIN_BF120 -to FPGA_I2C_SCL
 set_location_assignment PIN_BH118 -to FPGA_I2C_SDA
@@ -138,6 +143,7 @@ foreach p {KEY[0] KEY[1] KEY[2] KEY[3] SW[0] SW[1] SW[2] SW[3] SW[4] SW[5] SW[6]
 }
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to uart_rxd
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to uart_txd
+set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to H2F_CLK_TEST
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SCL
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SDA
 set_instance_assignment -name CURRENT_STRENGTH_NEW 6MA    -to uart_txd

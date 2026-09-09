@@ -140,8 +140,13 @@ the unchanged fabric register block:
   instantiated as a VHDL component — no wrapper-generator script) —
   HPS + HPS-EMIF **DDR4**, with **EMAC0** (gigabit, RGMII + MDIO),
   **SD/MMC** (4-bit), UART1 console, I2C1. `H2F`/`F2SDRAM`/`F2H(ACE5-Lite)`
-  are disabled; `LWH2F` (lightweight HPS-to-FPGA) and the F2H interrupts
-  stay enabled but unwired — see [hps/README.md](hps/README.md).
+  are disabled; the F2H interrupts stay enabled but unwired. `LWH2F`
+  (lightweight HPS-to-FPGA) **is** wired, into the same register block
+  below — hardware-confirmed working (register reads/writes over LWH2F
+  match the fabric UART exactly) — see [hps/README.md](hps/README.md).
+  The HPS's dedicated free-running **H2F User0 clock** (50 MHz,
+  independent of the board oscillator) is also wired and hardware-confirmed
+  — see `h2f_user0_clk_heartbeat.vhd` and hps/README.md's own section.
 - `de25_uart_top` — the fabric UART register block, exactly as above, on
   `GPIO_D[0]/[1]`, independent of the HPS.
 
