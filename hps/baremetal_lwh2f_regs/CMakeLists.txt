@@ -16,6 +16,6 @@ project(hps_lwh2f_regs C ASM)
 add_executable(hps_lwh2f_regs.elf)
 generate_bin_file(hps_lwh2f_regs.elf)
 
-target_sources(hps_lwh2f_regs.elf PRIVATE hps_lwh2f_regs.c clkmgr_bringup.c)
+target_sources(hps_lwh2f_regs.elf PRIVATE hps_lwh2f_regs.c clkmgr_bringup.c vectors.S)
 target_link_libraries(hps_lwh2f_regs.elf PRIVATE alterametal)
 target_link_options(hps_lwh2f_regs.elf PRIVATE -T${ALTERAMETAL_LINKER_SCRIPT})

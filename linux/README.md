@@ -154,12 +154,23 @@ register 4 (read-strobe counter, incrementing across reads) all work
 exactly as they do over the fabric UART. **The LWH2F bridge itself is
 fixed and hardware-confirmed working.**
 
-The *original* bare-metal test (`hps/baremetal_lwh2f_regs/`) still hangs on
-its own self-test read, even with the RTL fix and a generous extra delay
-added before that read — a separate, unresolved, bare-metal-specific issue
-now that the bridge itself is proven working elsewhere. See that
-directory's README for the full detail; not chased further this session in
-favor of getting the actual bridge fix documented and committed.
+**Update, later the same day — also resolved.** The *original* bare-metal
+test (`hps/baremetal_lwh2f_regs/`) kept hanging on its own self-test read
+even with the RTL fix. Installing a real EL3 exception vector table (never
+present before - `VBAR_EL3` stayed at its power-on-reset value of `0x0`)
+showed it wasn't a hang at all: a clean synchronous external abort
+(`ESR_EL3` EC=0x25, DFSC=0x10), the same fault class as Linux's `SIGBUS`.
+Root cause: the ARM cores' own AXI master ports into the NoC (Arteris Ncore
+CCU crossbar, `caiu0`/`ncaiu0` at `0x1C000000`/`0x1C001000` - unrelated to
+any register in `hps_address_map.h`) need a routing/window table entry
+programmed before a LWSOC2FPGA-targeted transaction has anywhere to go at
+all. ATF's `init_ncore_ccu()` does this unconditionally, very early in
+BL2, entirely separate from the bridge-enable sequence. Replicating those
+same three register writes in the bare-metal test before the read fixed it
+completely - confirmed on hardware (`self-test: register 1 (id) =
+0x0000DE25 -> PASS`, plus a manual write/read round-trip). See
+`hps/baremetal_lwh2f_regs/README.md` for the full trail, including why a
+real JTAG debugger halt wasn't viable in this environment (tried first).
 
 ## Session status (2026-09-08)
 

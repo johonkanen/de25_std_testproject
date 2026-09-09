@@ -41,7 +41,38 @@ this was chased down via a full ATF+U-Boot+Linux boot, not this file).
 reason** - see below. The bridge is not the mystery anymore; something
 particular to running with no ATF at all still is.
 
-## ⚠️ This file's own test still hangs - unresolved (separate from the bridge bug above)
+## ✅ RESOLVED, 2026-09-09: this file's own test passes on hardware
+
+```
+self-test: register 1 (id) = 0x0000DE25  -> PASS
+> w 3 0xdeadbeef
+wrote 0xDEADBEEF to reg 00000003
+> r 3
+reg 00000003 = 0xDEADBEEF
+```
+
+The final missing piece, found by installing a real EL3 exception vector
+table (`vectors.S` - see "Real JTAG debug halt: not viable" further down
+for why this software approach was used instead) and reading ATF's own BL2
+platform-init source for anything else it does unconditionally: the ARM
+cores' own AXI master ports into the NoC (Arteris Ncore CCU crossbar -
+`caiu0`/`ncaiu0`, base `0x1C000000`/`0x1C001000`, nothing to do with any
+register in `hps_address_map.h`) each have a routing/window table entry
+that must be programmed before a LWSOC2FPGA-targeted transaction has
+anywhere valid to go at all. ATF's `init_ncore_ccu()`
+(`plat/intel/soc/common/drivers/ccu/ncore_ccu.c`) configures this
+unconditionally, very early in BL2, completely separately from
+`socfpga_bridges_enable()` - and nothing bare-metal ever replicated it
+before now. `hps_lwh2f_regs.c`'s `ncore_program_lwsoc2fpga_window()`
+programs the same three registers ATF does (values confirmed live from a
+working U-Boot prompt first, then replicated here) before the read - fixed.
+
+All the debugging below is kept as the real trail that got here (the
+bridge-enable sequence, NOC firewall, and SMMU items were all real things
+to check, even though none of them were the actual final answer) rather
+than deleted now that it's solved.
+
+## Debugging trail (superseded by the fix above, kept for the record)
 
 `LWH2F_BASE` is `0x20000000`, given directly by the project owner from the
 Agilex 5 HPS TRM (an earlier guess, `0xF9000000` - the Stratix10/Agilex1
@@ -176,6 +207,79 @@ FPGA bitstream) - what's left is specific to this bare-metal test's own
 environment (no ATF, EL3, whatever else genuinely differs from U-Boot's
 SMC-mediated enable beyond the sequence of register writes, which are now
 confirmed byte-for-byte identical to ATF's own Agilex5 path).
+
+**Update, 2026-09-09, later the same day**: this "hang" was never a stuck
+bus transaction. `vectors.S` installs a minimal EL3 exception vector table
+(nothing in this project's startup path - the toolchain's default crt0,
+`fsbl_boot_help.c`, `clkmgr_bringup.c` - ever sets `VBAR_EL3`, so it stayed
+at its power-on-reset value of `0x0`; a real exception was vectoring into
+whatever code happened to sit at a fixed offset from address `0x0` and
+producing silence indistinguishable from a genuinely stuck instruction).
+With the table installed, the fault reports cleanly:
+```
+CurrentEL = 3  -> VBAR_EL3 installed
+*** EL3 EXCEPTION ***
+ESR_EL3 = 0x0000000096000010  (EC=0x25, ISS=0x10)
+FAR_EL3 = 0x0000000020000010
+ELR_EL3 = 0x0000000000000E98
+```
+`EC=0x25` = Data Abort, same exception level; `DFSC (ISS[5:0])=0x10` =
+"Synchronous External Abort, not on translation table walk". This is the
+exact same fault class Linux reported as `SIGBUS` on this address with
+`CONFIG_STRICT_DEVMEM` confirmed disabled (see `linux/README.md`) - a
+genuine, immediate hardware-level abort, not a hang, and not a permission
+check either (EL3 has no permission to be denied).
+
+That reframes the open question precisely: **why does U-Boot's identical
+access to the identical address succeed**, when this bare-metal test - with
+the bridge-enable sequence now confirmed byte-for-byte identical to ATF's
+own, NOC firewall permission confirmed set, and SMMU confirmed disabled -
+gets a hard external abort at EL3, the *most* privileged level there is?
+Something ATF's real boot chain (BL2/BL31) sets up once, system-wide,
+separate from the bridge-enable sequence itself, is still missing from a
+from-scratch bare-metal boot.
+
+**Found it**: `init_ncore_ccu()`
+(`plat/intel/soc/common/drivers/ccu/ncore_ccu.c`), called unconditionally
+in BL2 well before `socfpga_bridges_enable()` even runs, programs the
+Arteris Ncore CCU crossbar's own routing/window table for every AXI
+master port - including a `caiu0`/`ncaiu0` (base `0x1C000000`/`0x1C001000`)
+entry specifically for LWSOC2FPGA. Confirmed live from a working U-Boot
+prompt that a real boot chain leaves these programmed
+(`0x1C000440`/`0x1C001440` both read `0xC1100006 00020000 00000000`,
+exactly matching that table) - and confirmed that programming the same
+three registers from this bare-metal test, before the read, fixes it
+completely. See the top of this file for the final result.
+
+## Real JTAG debug halt: not viable in this environment
+
+Before writing `vectors.S`, tried an actual JTAG-attached debugger halt
+first. Quartus bundles a real, working toolchain for this - OpenOCD
+(`<quartus>/linux64/openocd`, needs
+`LD_LIBRARY_PATH=<quartus>/linux64` for `libaji_client.so.0`) with an
+`aji_client` adapter driver that talks straight to the already-running
+`jtagd` (no USB contention, no need to stop it) - confirmed connecting
+cleanly and correctly identifying the JTAG tap (`instruction_length=10`,
+matching the known JTAG ID). System Console (`syscon/bin/system-console
+--cli`) also exposes `processor_gdbserver`/`processor_gdbserver_start`,
+but that's for Nios/soft-core debug via a Platform Designer-visible
+"processor" service, not the HPS's hard ARM cores - `get_service_paths
+processor` stayed empty even with the design loaded.
+
+The real blocker: OpenOCD's own driver identifies this physical tap as an
+**"SLD Hub"** device, and a generic `dap create`/`target create ...
+aarch64` attempt to do a raw CoreSight DAP register access was explicitly
+rejected by the JTAG server: `Error: Failure to access IRSCAN register.
+Return Status is 50 (AJI_INSTRUCTION_CLAIMED)`. This tap is dedicated to
+FPGA configuration and Intel's shared "virtual JTAG" SLD-hub debug model
+(Nios/JTAG-UART/SignalTap-style) - real ARM CoreSight debug access for
+Agilex 5, if Intel exposes it at all, needs something this consumer
+Quartus install doesn't provide (likely an SDM-mediated authentication
+step, unlike the raw scannable ARM DAP tap Cyclone V/Arria10 exposed
+directly - `oocd/openocd/scripts/target/altera_fpgasoc_arria10.cfg` is
+the old two-tap pattern that doesn't apply here). Software instrumentation
+(`vectors.S`) turned out to be both sufficient and actually the thing that
+found the real answer.
 
 ## Running the real thing instead: `freertos-socfpga`
 

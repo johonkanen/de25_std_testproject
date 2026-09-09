@@ -34,6 +34,16 @@
 
 extern int32_t stdout_uart_fd;
 
+/* vectors.S - minimal EL3 exception vector table, installed just before the
+ * LWH2F self-test read below so a real exception (rather than a genuinely
+ * stuck bus transaction) reports itself instead of just going silent. */
+extern uint64_t read_current_el(void);
+extern void vbar_el3_install(void);
+
+/* Set by main() right after opening it, so the asm exception handler (which
+ * has no other way to reach main()'s locals) can still print through it. */
+static volatile int32_t g_uart1_fd = -1;
+
 /* Physical base address of the LWH2F window as seen by the ARM cores. */
 #define LWH2F_BASE 0x20000000UL
 
@@ -60,6 +70,36 @@ static void send_hex_u32(int32_t fd, uint32_t v) {
         v >>= 4;
     }
     (void)uart_write(fd, (uintptr_t)buf, sizeof(buf));
+}
+
+static void send_hex_u64(int32_t fd, uint64_t v) {
+    send_hex_u32(fd, (uint32_t)(v >> 32));
+    send_hex_u32(fd, (uint32_t)v);
+}
+
+/* Called from vectors.S's el3_common_handler on any EL3 exception. Not
+ * static (needs external linkage for the assembly to call it) - see that
+ * file's own header comment for why this exists. */
+void exception_report(uint64_t esr, uint64_t far, uint64_t elr) {
+    int32_t fd = g_uart1_fd;
+    if (fd < 0) {
+        while (1) {
+        }
+    }
+    send_str(fd, "\r\n*** EL3 EXCEPTION ***\r\n");
+    send_str(fd, "ESR_EL3 = 0x");
+    send_hex_u64(fd, esr);
+    send_str(fd, "  (EC=0x");
+    send_hex_u32(fd, (uint32_t)((esr >> 26) & 0x3FU));
+    send_str(fd, ", ISS=0x");
+    send_hex_u32(fd, (uint32_t)(esr & 0x1FFFFFFU));
+    send_str(fd, ")\r\n");
+    send_str(fd, "FAR_EL3 = 0x");
+    send_hex_u64(fd, far);
+    send_str(fd, "\r\n");
+    send_str(fd, "ELR_EL3 = 0x");
+    send_hex_u64(fd, elr);
+    send_str(fd, "  (faulting/next instruction address)\r\n");
 }
 
 static void uart_set_divisor(uintptr_t base, uint32_t divisor) {
@@ -102,6 +142,42 @@ static void busy_delay(void) {
 static void long_busy_delay(uint32_t iters) {
     for (volatile uint32_t i = 0; i < iters; i++) {
     }
+}
+
+/* Arteris Ncore CCU (the actual NoC crossbar/interconnect fabric, not to be
+ * confused with the RSTMGR/SYSMGR bridge-enable registers above) - the ARM
+ * cores' own AXI master ports into the NoC (caiu0 = coherent, ncaiu0 =
+ * non-coherent) each have a routing/window table entry that must be
+ * programmed before a transaction targeting LWSOC2FPGA has anywhere valid
+ * to go. ATF's BL2 configures this unconditionally, very early, via
+ * init_ncore_ccu() (plat/intel/soc/common/drivers/ccu/ncore_ccu.c's
+ * ccu_caiu0[]/ccu_ncaiu0[]'s "NCAIU0_LWSOC2FPGA" entries) - completely
+ * separate from bridge_enable()'s rstmgr/sysmgr sequence above, and never
+ * replicated here before now. Confirmed live from a working U-Boot prompt
+ * that these exact values are what a real boot chain leaves programmed
+ * (0x1C000440/0x1C001440 both read 0xC1100006 00020000 00000000) - see
+ * this file's README for the full trail. */
+#define NCORE_CAIU0_BASE  0x1C000000UL
+#define NCORE_NCAIU0_BASE 0x1C001000UL
+
+static void ncore_program_lwsoc2fpga_window(uint64_t base, int32_t dbg_fd) {
+    volatile uint32_t *r444 = (volatile uint32_t *)(base + 0x444UL);
+    volatile uint32_t *r448 = (volatile uint32_t *)(base + 0x448UL);
+    volatile uint32_t *r440 = (volatile uint32_t *)(base + 0x440UL);
+
+    *r444 = 0x00020000U;                                            /* mask 0xFFFFFFFF */
+    *r448 = (*r448 & ~0x000000FFU) | (0x00000000U & 0x000000FFU);   /* mask 0x000000FF */
+    *r440 = (*r440 & ~0xC1F03E1FU) | (0xC1100006U & 0xC1F03E1FU);   /* mask 0xC1F03E1F */
+
+    send_str(dbg_fd, "ncore window @0x");
+    send_hex_u64(dbg_fd, base);
+    send_str(dbg_fd, " = 0x");
+    send_hex_u32(dbg_fd, *r440);
+    send_str(dbg_fd, " 0x");
+    send_hex_u32(dbg_fd, *r444);
+    send_str(dbg_fd, " 0x");
+    send_hex_u32(dbg_fd, *r448);
+    send_str(dbg_fd, "\r\n");
 }
 
 static uint32_t rstmgr_get(int32_t rstmgr_handle, int32_t op) {
@@ -310,6 +386,7 @@ int main(void) {
         while (1) {
         }
     }
+    g_uart1_fd = uart1;
 
     if (uart_clk_hz > 0U) {
         uint32_t divisor = uart_clk_hz / (115200U * 16U);
@@ -391,6 +468,24 @@ int main(void) {
         send_str(uart1, "smmu_open failed\r\n");
     }
 
+    /* Install a real exception vector table (see vectors.S's header
+     * comment) before touching LWH2F: nothing in this program's startup
+     * path ever sets VBAR_EL3, so a genuine exception here would otherwise
+     * vector into whatever code happens to sit at a fixed offset from
+     * address 0x0 and produce silence indistinguishable from a truly stuck
+     * bus transaction. Only implemented for EL3 - bail loudly (rather than
+     * silently install a table for the wrong EL, which just replaces one
+     * kind of silent failure with another) if we're not there. */
+    uint64_t current_el = read_current_el();
+    send_str(uart1, "CurrentEL = ");
+    send_hex_u32(uart1, (uint32_t)current_el);
+    if (current_el == 3U) {
+        vbar_el3_install();
+        send_str(uart1, "  -> VBAR_EL3 installed\r\n");
+    } else {
+        send_str(uart1, "  -> not EL3, vector table NOT installed (vectors.S is EL3-only)\r\n");
+    }
+
     /* Necessary but NOT sufficient, empirically (see long_busy_delay()'s own
      * comment and this file's README): with a genuine de25_soc_top.vhd
      * reset-polarity bug fixed and this delay in place, LWH2F works
@@ -402,6 +497,13 @@ int main(void) {
      * still gates it. Left in since it's still a real requirement, just
      * not the whole story. */
     long_busy_delay(60000000U);
+
+    /* NoC crossbar routing window for LWSOC2FPGA on the ARM cores' own
+     * master ports - see ncore_program_lwsoc2fpga_window()'s own comment.
+     * Without this, there is no configured path through the interconnect
+     * for this transaction at all, regardless of anything above. */
+    ncore_program_lwsoc2fpga_window(NCORE_CAIU0_BASE, uart1);
+    ncore_program_lwsoc2fpga_window(NCORE_NCAIU0_BASE, uart1);
 
     /* self-test: register 1 is the constant id, 0x0000DE25 */
     uint32_t id = *lwh2f_reg(1);
