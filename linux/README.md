@@ -48,16 +48,8 @@ needs). Overrides:
 ## Build
 
 ```
-# 1. FPGA (from the repo root)
-python3 hps/disable_bridges.py
-qsys-generate hps/ip/hps_subsys/agilex_hps.ip     --synthesis=VHDL --part=A5ED013BB32AE4SCS
-qsys-generate hps/ip/qsys_top/emif_io96b_hps.ip   --synthesis=VHDL --part=A5ED013BB32AE4SCS
-python3 hps/gen_hps_min.py
-quartus_sh -t build_de25_soc.tcl
-quartus_syn de25_soc && quartus_fit de25_soc && quartus_asm de25_soc
-
-# 2. Linux
-./linux/build_de25_linux.sh
+./build.sh fpga     # 1. FPGA -> build/fpga/output_files/de25_soc.sof
+./build.sh linux    # 2. Linux
 ```
 
 Outputs in `linux/build_output/` (sizes from a real run):

@@ -34,7 +34,7 @@ generator this replaces) — smaller HPS config, smaller pin file.
 | F2H interrupts | enabled, exported as `fpga2hps_interrupt_irq0/1` |
 
 `lwhps2fpga` is wired through `axi_lwh2f_bridge.vhd` into the register
-file (`uart_register_block.vhd`) and is hardware-confirmed; the F2H
+file (`register_block.vhd`) and is hardware-confirmed; the F2H
 interrupts are tied to `0` in `de25_soc_top.vhd`.
 
 ## Removing `iopll_0`

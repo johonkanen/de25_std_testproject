@@ -11,40 +11,20 @@ Agilex 5 `A5ED013BB32AE4SCS`.
 | `KEY[3:0]`    | BW59 / CA59 / CF71 / CH71 | 1.2-V | active low |
 | `SW[9:0]`     | BM62 BP62 BH62 BH59 BM59 BK59 BU62 CF59 BU59 BR59 | 1.2-V | |
 | `LEDR[9:0]`   | CC71 BH78 CH69 CF69 CA62 CC62 CF62 BM69 CA71 BR62 | 1.2-V | LEDR[9] = heartbeat |
-| `uart_rxd`    | PIN_BK31  | 3.3-V LVCMOS | `GPIO_D[0]` — board→FPGA |
-| `uart_txd`    | PIN_BE43  | 3.3-V LVCMOS | `GPIO_D[1]` — FPGA→board |
+| `H2F_CLK_TEST` | PIN_BF29 | 3.3-V LVCMOS | `GPIO_D[2]`, H2F User0 clock heartbeat |
+| `FPGA_I2C_SCL` / `FPGA_I2C_SDA` | BF120 / BH118 | 3.3-V LVCMOS | MAX6650 fan bus |
 
-## Why the UART is on the GPIO header
-
-The DE25-Standard's on-board USB bridge is a **Silicon Labs CP2105** dual
-UART (`~/dev/de25_std/Datasheet/UART TO USB/CP2105-F01-GM.pdf`). In every
-Terasic example its UART lines go to the **HPS** (`HPS_UART_RX` PIN_AB127 /
-`HPS_UART_TX` PIN_M124, 1.8 V) — there is no FPGA-fabric UART wired to it.
-
-So this build breaks the UART out to two GPIO-header pins and you attach an
-external **3.3 V** USB-serial adapter (FT232, CP210x, CH340, …):
-
-```
-adapter GND  <-> GPIO header GND
-adapter TXD   -> GPIO_D[0]  (uart_rxd, PIN_BK31)
-adapter RXD  <-  GPIO_D[1]  (uart_txd, PIN_BE43)
-```
-
-`GPIO_D[0]` / `GPIO_D[1]` are the first two pins of the 40-pin GPIO header;
-check the DE25-Standard User Manual §3.9 "GPIO" for the exact header
-position and whether that header sits behind a level translator (if it uses
-an auto-direction shifter, move `uart_txd` to a plain output-capable pin).
-
-## Repointing the pins
-
-Edit the two `set_location_assignment` lines for `uart_rxd` / `uart_txd`
-in `build_de25_soc.tcl` and re-run `quartus_sh -t build_de25_soc.tcl`.
+The HPS console is HPS UART1 on dedicated HPS pins (`HPS_UART_TX` M124 /
+`HPS_UART_RX` AB127, 1.8 V) to the board's USB-UART. The fabric UART that
+used to be on `GPIO_D[0]/[1]` was removed; LWH2F is the only way into the
+register file.
 
 ## Using a PLL instead of the raw 50 MHz clock
 
-This build runs everything on `CLOCK0_50` (`g_clock_divider = 434`). To get
+This build runs everything on `CLOCK0_50`. To get
 a 100 MHz core clock like `axc3000_test`, add an `altera_iopll`
 (50 MHz → 100 MHz, `locked` used) — the DE25 demos
 `Demonstration/FPGA/DRAM_RTL_Test/v/pll.ip` is a board-tested 50→100/200
-IOPLL for this exact device you can copy into `ip/`. Then set
-`g_clock_divider = 868` and hold `system_reset` until `locked`.
+IOPLL for this exact device you can copy into `ip/`. Then hold
+`system_reset` until `locked`, and update `g_clock_hz` of the fan
+controller.

@@ -9,9 +9,8 @@
 #                    enabled.  Platform Designer system:
 #                    hps/hps_subsystem.qsys + hps/ip/hps_subsystem/*.ip.
 #                    See hps/README.md.
-#   * uart_register_block - the fpga_interconnect register file, reachable
-#                    over BOTH the fabric UART (GPIO_D[0]/[1]) and the
-#                    HPS's LWH2F, via axi_lwh2f_bridge.vhd.
+#   * register_block - the fpga_interconnect register file, reachable
+#                    over the HPS's LWH2F, via axi_lwh2f_bridge.vhd.
 #
 # Out of tree: run from a build directory, never from the source tree.
 # The script copies hps/ (.qsys + .ip) there, because Quartus generates IP
@@ -57,11 +56,9 @@ set need_to_close_project 0
 if {[is_project_open]} {
     if {[string compare $quartus(project) "de25_soc"]} { puts "Project de25_soc is not open"; exit 1 }
 } else {
-    if {[project_exists de25_soc]} {
-        project_open -revision de25_soc de25_soc
-    } else {
-        project_new -revision de25_soc de25_soc
-    }
+    # Always start from an empty .qsf: reopening an existing project only
+    # adds assignments, so removed files and pins would stay in it.
+    project_new -overwrite -revision de25_soc de25_soc
     set need_to_close_project 1
 }
 
@@ -93,10 +90,6 @@ set_global_assignment -name POWER_APPLY_THERMAL_MARGIN ADDITIONAL
 # ---------------------------------------------------------- fabric HDL
 set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_fpga_interconnect/fpga_interconnect_generic_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/fpga_interconnect_16bit_pkg.vhd
-set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_uart/uart_rx/uart_rx_pkg.vhd
-set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_uart/uart_tx/uart_tx_pkg.vhd
-set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/serial_protocol_generic_pkg.vhd
-set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/communications.vhd
 set_global_assignment -name VHDL_FILE git_hash_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
 
@@ -104,7 +97,7 @@ set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/i2c_master_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/max6650_fan_control.vhd
 
-set_global_assignment -name VHDL_FILE $this_file_path/uart_register_block.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/register_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/de25_soc_top.vhd
 
@@ -145,8 +138,6 @@ set_location_assignment PIN_CF62  -to LEDR[6]
 set_location_assignment PIN_BM69  -to LEDR[7]
 set_location_assignment PIN_CA71  -to LEDR[8]
 set_location_assignment PIN_BR62  -to LEDR[9]
-set_location_assignment PIN_BK31  -to uart_rxd
-set_location_assignment PIN_BE43  -to uart_txd
 
 # H2F User0 clock heartbeat test - GPIO_D[2] (see docs/de25_pinout.md and
 # h2f_user0_clk_heartbeat.vhd), from Demonstration/FPGA/golden_top/golden_top.qsf
@@ -162,12 +153,9 @@ foreach p {KEY[0] KEY[1] KEY[2] KEY[3] SW[0] SW[1] SW[2] SW[3] SW[4] SW[5] SW[6]
            LEDR[0] LEDR[1] LEDR[2] LEDR[3] LEDR[4] LEDR[5] LEDR[6] LEDR[7] LEDR[8] LEDR[9]} {
     set_instance_assignment -name IO_STANDARD "1.2-V" -to $p
 }
-set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to uart_rxd
-set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to uart_txd
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to H2F_CLK_TEST
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SCL
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SDA
-set_instance_assignment -name CURRENT_STRENGTH_NEW 6MA    -to uart_txd
 
 # ------------------------------------------------ HPS + DDR4 pins (GHRD)
 # 100 pins x {location, IO_STANDARD} for the peripherals this pin mux

@@ -13,15 +13,15 @@ Where this is going: [docs/plan_upstream_hps_first_webgui.md](docs/plan_upstream
 | path | what |
 |------|------|
 | `fpga/` | top level `de25_soc_top.vhd`, register file, LWH2F bridge, `de25_soc.sdc`, `build_de25_soc.tcl` (creates the Quartus project) |
-| `fpga/source/` | `hVHDL_uart`, `hVHDL_fpga_interconnect` (submodules), vendored `fpga_communication`, MAX6650 fan controller |
+| `fpga/source/` | `hVHDL_fpga_interconnect` (submodule), its 32/16-bit instance in `fpga_communication/`, MAX6650 fan controller |
 | `fpga/hps/` | HPS + DDR4 EMIF Platform Designer system ([fpga/hps/README.md](fpga/hps/README.md)) |
 | `tools/` | `program.sh` (JTAG), `write_githash.sh` |
 | `linux/` | ATF / U-Boot / kernel build, device tree, QSPI image ([linux/README.md](linux/README.md)) |
 | `docs/` | pinout, fan controller, plan |
 
-The fabric-only `de25_uart` build, the bare-metal HPS tests and the
-FreeRTOS experiment were removed; they are in the git history before this
-README's commit.
+The fabric-only `de25_uart` build, the bare-metal HPS tests, the
+FreeRTOS experiment and the fabric UART register master were removed;
+they are in the git history.
 
 ## Build
 
@@ -53,9 +53,8 @@ more than one cable attached, name it: `CABLE="<name from jtagconfig>"`.
 
 ## Register file
 
-Over LWH2F at `0x2000_0000`, register *n* at byte offset *n* × `0x10`.
-The same registers are also reachable over a fabric UART on
-`GPIO_D[0]/[1]` (3.3 V); that path is scheduled for removal.
+Over LWH2F at `0x2000_0000`, register *n* at byte offset *n* × `0x10`
+(`fpga/register_block.vhd`).
 
 | reg | meaning |
 |----:|---------|

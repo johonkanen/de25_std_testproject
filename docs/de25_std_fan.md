@@ -100,7 +100,7 @@ KTACH formula in reverse for this - the two registers are not on the
 same scale). `Tach0Count` (register `0x0C`) is 8 bits, so `rpm_out` tops
 out at `60 * 255 = 15300`, comfortably above this board's fan range.
 
-## Register map (this project's `uart_register_block.vhd`)
+## Register map (this project's `register_block.vhd`)
 
 | addr | contents | access |
 |-----:|----------|--------|
@@ -141,13 +141,13 @@ the MAX6650 defaults to out of reset - no board-management IP is present
 in this project at all, so nothing configured the chip before this
 driver existed.
 
-Not yet done: reading back register 10/11 over the fabric UART to get an
+Not yet done: reading back register 10/11 (now over LWH2F) to get an
 actual RPM number and confirm `config_readback` reads `0x29` (no
-USB-serial adapter was attached to the GPIO header this session). So
+USB-serial adapter was attached to the old fabric UART that session). So
 1500 RPM is confirmed quiet and confirmed spinning, but not confirmed to
 actually be regulating at 1500 RPM specifically, nor soak-tested for
 long-term stability the way the DE25-Nano's minimum was - and there is
 still no thermal fail-safe (see "Control mode" above): this chip has no
-temperature sensing of its own, unlike the AMC6821. Wire up a fabric
-UART adapter to get real telemetry before trusting this as a
+temperature sensing of its own, unlike the AMC6821. Read the telemetry
+over LWH2F (plan phase C7) before trusting this as a
 production setting, particularly under any thermal load.

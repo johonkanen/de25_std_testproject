@@ -4,12 +4,12 @@
 -- hps/README.md's "H2F User0 clock" section) is actually toggling, by
 -- dividing it down to a slow, human-visible blink on its own pin.
 --
--- Deliberately isolated from uart_register_block.vhd / the LWH2F path:
+-- Deliberately isolated from register_block.vhd / the LWH2F path:
 -- runs entirely in this one clock domain, touches nothing else in the
 -- design, and needs no CDC (there's nothing to cross to). Probe
 -- GPIO_D[2] with a logic probe, LED+resistor, or scope to confirm - it
 -- should toggle at ~50MHz / 2**26 =~ 0.75 Hz, the same divider ratio
--- uart_register_block.vhd's own CLOCK0_50 heartbeat uses, so a working
+-- register_block.vhd's own CLOCK0_50 heartbeat uses, so a working
 -- H2F User0 clock blinks at very close to the same rate as LEDR(9).
 ------------------------------------------------------------------------
 library ieee;

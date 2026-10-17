@@ -1,8 +1,10 @@
 # Plan: DE25-Standard to upstream boot, HPS-first, network updates, web GUI
 
-Status 2026-10-17: **plan only**, except the first cleanup step of Phase
-0b (deleting everything that is not the Linux system), done on branch
-`upstream-hps-first`. The reference implementation is the sister repository
+Status 2026-10-17: Phase 0b (cleanup, out-of-tree FPGA build, fabric UART
+removed) done on branch `upstream-hps-first`; the rest is plan only. The
+Linux build moves into `build/` with its Phase A rewrite. §2 describes the
+repository *before* Phase 0b; paths elsewhere are the new ones (`fpga/`,
+`tools/`, `build/`). The reference implementation is the sister repository
 `~/dev/de25_nano_testproject` (DE25-Nano, same Agilex 5 family), referred
 to below as "the Nano repo". Paths without a repo prefix are in this repo
 (`~/dev/de25_std_testproject`); `nano:` paths are in the Nano repo.
@@ -40,7 +42,7 @@ a person at the power switch.
 |---|---|---|
 | removed 2026-10-17 | fabric-only `de25_uart` build, its testbench and `test_uart.py`, the bare-metal HPS tests (`hps/baremetal_*`), the FreeRTOS experiment, scratch `out_*.sof`, all in-tree Quartus output | in git history before the cleanup commit. Binaries of the 2026-09-08 state (upstream U-Boot that failed on SD, `.sof`, `.jic`, ATF hand patch as a `.patch`) saved in `~/de25_std_known_good_2026-09-08/`. The hand-built Terasic U-Boot that booted the board exists **only on the SD card** |
 | `build_de25_soc.tcl`, `de25_soc_top.vhd` | HPS (`hps/hps_subsystem.qsys`) + DDR4 + `uart_register_block.vhd`; LWH2F wired and hardware-confirmed | no `QSPI_OWNERSHIP` (default SDM), no `HPS_INITIALIZATION` (default "AFTER INIT_DONE"); fabric on `CLOCK0_50`; LWH2F bridge reset follows `CPU_RESET_n` |
-| `uart_register_block.vhd` | registers 1..11 (see table in §3.3), two masters (fabric UART + LWH2F) | no build id, no blinkers, no HEX |
+| `uart_register_block.vhd` (now `fpga/register_block.vhd`) | registers 1..11 (see table in §3.3), two masters (fabric UART + LWH2F); LWH2F only since 0b | no build id, no blinkers, no HEX |
 | HPS IP `hps/ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip` | vendored from another DE25-Standard project; EMAC0, SD, UART1, I2C1; LWH2F 32-bit; H2F User0 clock 50 MHz | **`Pwr_a76_core2_on`/`_core3_on` = false** (also `{0}` in `hps/hps_subsystem.tcl` lines 1343-1344): Linux would see 2 CPUs. HPS_LED/HPS_KEY (GPIO1 IO17/IO16), USB0, SPIM0 not in the pin mux |
 | `PROJECT_IP_REGENERATION_POLICY` | `ALWAYS_REGENERATE_IP` in `build_de25_soc.tcl` | good - avoids most of the Nano's stale-IP trap, but verify anyway (§5.1) |
 | `linux/build_de25_linux.sh` | ATF/U-Boot/Linux from the `QPDS26.1.1_REL_GSRD_PR` tag (the same commits as `socfpga_v2.14.1` / `socfpga_v2026.04`), U-Boot with `socfpga_agilex5_defconfig` + the **Nano's** DT, toybox initramfs | SD did **not** work with that U-Boot (every SD command timed out); the board was booted with **Terasic's fork** `terasic/u-boot-socfpga` `de25-standard-v2025.01` (`socfpga_agilex5_de25s_defconfig`), built by hand - the script was never updated. ATF `config_ddr_size` patch applied by hand in `linux/build_output/arm-trusted-firmware` |
@@ -74,7 +76,7 @@ derived from upstream's Nano DTs plus Terasic's Standard DTs.
 |---|---|---|---|
 | device | `A5ED013BB32AE4SCS` (2x A55 + 2x A76 per the user manual) | `A5EB013BB23BE4SCS` | `FLASH_LOADER=A5ED013BB32AE4SCS` - use the full string (the Nano found the abbreviated form resolves a different IDCODE) |
 | HPS console | **HPS UART1 on dedicated HPS pins** (`HPS_UART_TX` M124 / `HPS_UART_RX` AB127, 1.8 V) to the board's USB-UART (repo docs say CP2105; user manual rev D says FT2232H inside the USB-Blaster III, one Type-C) | UART1 routed **through the fabric** to `FPGA_UART_TX/RX` | on the Standard the console works **from the first SPL line even in HPS-first mode** - the Nano's "silent until the core loads" problem does not exist here. All serial tools need a new `default_console()` |
-| fabric UART | register-file UART master on `GPIO_D[0]/[1]` (external 3.3 V adapter); its host tool was deleted in the cleanup | retired | remove in Phase 0b: it is a second bus master into the register file that `fpga_access.py` does not know about, and only Linux matters now |
+| fabric UART | removed in Phase 0b (was a register-file UART master on `GPIO_D[0]/[1]`) | retired | LWH2F is the only bus master, as on the Nano |
 | fabric clock | `CLOCK0_50` (CH128, 3.3 V); LWH2F AXI clock = `CLOCK0_50` | HPS `h2f_user0` clock | fine either way; keep `CLOCK0_50` |
 | reset | `CPU_RESET_n` button (BM78) resets the register file **and the LWH2F bridge-side reset** (`axi_bridge_reset <= system_reset`) | power-on counter only | pressing the button while Linux polls LWH2F (20 Hz) can stall the CPU. Phase C decouples the bridge reset from the button |
 | LEDs | `LEDR[9:0]`, 1.2 V; `LEDR[9]` heartbeat | `LED[7:0]`; `LED[7]` heartbeat | blinkers and GUI for 10 LEDs |
@@ -106,7 +108,7 @@ derived from upstream's Nano DTs plus Terasic's Standard DTs.
 | `nano:linux/board/de25web-supervisor.sh` | `linux/board/` | almost unchanged (paths are generic `/opt/de25web`) |
 | `nano:linux/webapp/*` | `linux/webapp/` | register map, LED/SW/KEY counts, HEX, fan model, board drawing |
 | `nano:write_build_id.sh` | `write_build_id.sh` | unchanged |
-| `nano:source/led_blinkers.vhd`, `nano:source/blinkers/*.vhd`, `nano:sim/led_blinkers_tb.vhd`, `nano:vunit_run_de25_nano_test.py` | `source/`, `sim/`, `vunit_run_de25_std_test.py` | 10 LEDs instead of 8 |
+| `nano:source/led_blinkers.vhd`, `nano:source/blinkers/*.vhd`, `nano:sim/led_blinkers_tb.vhd`, `nano:vunit_run_de25_nano_test.py` | `fpga/source/`, `fpga/sim/`, `fpga/vunit_run_de25_std_test.py` | 10 LEDs instead of 8 |
 | `nano:axi_lwh2f_bridge.vhd` | already here (it came from this repo) | none |
 
 These are copies, so the two repos will drift. Accept that for now; once both
@@ -125,7 +127,7 @@ Over LWH2F at `0x2000_0000`, register *n* at byte offset *n* x `0x10`.
 Keep the Nano's numbers for everything both boards have, so the web stack
 differs as little as possible.
 
-| reg | today (`uart_register_block.vhd`) | proposed | notes |
+| reg | today (`fpga/register_block.vhd`) | proposed | notes |
 |---:|---|---|---|
 | 1 | id `0x0000DE25` | same | |
 | 2 | git hash | same | |
@@ -200,27 +202,25 @@ Overview:
 Only the Linux system is kept: the FPGA design that carries the HPS
 handoff and the register file, the boot stack, the rootfs, the web stack.
 
-**0b1. Delete (done 2026-10-17).** See §2, "removed".
+**0b1. Delete (done 2026-10-17, `953f138`).** See §2, "removed".
 
-**0b2. Source layout.** `git mv` only, in one commit with no content
-changes, so `git log --follow` keeps working:
+**0b2. Source layout (done, `ea667ae`).** `git mv` plus the path fixes
+needed to keep it building, so `git log --follow` keeps working:
 
 ```
-fpga/            de25_soc_top.vhd, uart_register_block.vhd, axi_lwh2f_bridge.vhd,
+fpga/            de25_soc_top.vhd, register_block.vhd, axi_lwh2f_bridge.vhd,
                  h2f_user0_clk_heartbeat.vhd, de25_soc.sdc, build_de25_soc.tcl
 fpga/source/     (was source/: submodules, fan_control, fpga_communication)
 fpga/hps/        (was hps/: hps_subsystem.qsys, ip/, hps_pins.tcl, hps_subsystem.tcl)
 linux/           build_de25_linux.sh, make_jic.sh, dts/, uboot/, tools/, webapp/, board/
-tools/           program.sh, write_githash.sh, write_build_id.sh
+tools/           program.sh, write_githash.sh (write_build_id.sh comes in A1)
 docs/
 build.sh         single entry point
 ```
 
-Update `.gitmodules` paths (`git mv` does this for submodules) and the
-`$this_file_path` references in the tcl.
-
-**0b3. Everything generated goes to `build/`** (`BUILD_DIR` overrides it;
-`.gitignore` becomes `/build/`, `__pycache__/`, `*.pyc`):
+**0b3. Everything generated goes to `build/`** (done for the FPGA,
+`feaa43e`; `BUILD_DIR` overrides it; `.gitignore` is `/build/`,
+`/linux/build_output/` until A2, `__pycache__/`, `*.pyc`):
 
 ```
 build/fpga/                 Quartus project de25_soc: qpf/qsf, output_files/, qdb/, dni/,
@@ -233,38 +233,48 @@ build/sim/                  VUnit output
 build/toolchain/            aarch64 gcc, unless CROSS_TOOLCHAIN points elsewhere
 ```
 
-`build.sh fpga|linux|jic|sdcard|sim|all` runs each step with `build/` as
-the working directory. Steps:
+`build.sh fpga-project|fpga|linux|jic|all` runs each step (`sdcard` and
+`sim` are added in A6 and C1). What was done and learned:
 
-- **Quartus.** `cd build/fpga && quartus_sh -t ../../fpga/build_de25_soc.tcl`
-  works almost as is, because the tcl already uses absolute paths. The
-  exception is the IP: Quartus generates IP **next to the `.qsys`/`.ip`
-  file**, so the tcl copies `fpga/hps/` to `build/fpga/hps/` (refreshing it
-  when the source is newer) and points `QSYS_FILE` / `IP_FILE` at the
-  copies. Check that `hps_subsystem.qsys` refers to its `.ip` files by
-  relative path, so the copy resolves. Platform Designer GUI edits are made
-  on `fpga/hps/hps_subsystem.qsys`. Do not press "Generate" in the GUI,
-  because that writes generated output into the source tree.
-- **Generated VHDL.** `write_githash.sh` and `write_build_id.sh` take an
-  output directory and write into `build/fpga/`; `git_hash_pkg.vhd` is
-  untracked (`git rm --cached`). Today every stamped build dirties the tree.
-- **Linux.** `build_de25_linux.sh` and `make_jic.sh` take `BUILD_DIR`. The
-  Phase A rewrite (A2, A5) is written against this layout directly; do not
-  first port the old script. `linux/build_output/` (4.2 GB of old QPDS-tag
-  clones) is deleted once A2 has built.
-- **Fabric UART removal.** Drop `communications.vhd`, `hVHDL_uart`, the
-  `uart_rxd/uart_txd` ports and pins, as the Nano did in `0759dd4`; LWH2F
-  becomes the only bus master. This changes the periphery, which is fine
-  before Phase A's first `.jic`.
-- **`program.sh`**: default to `build/fpga/output_files/de25_soc.sof` and
-  select the cable by **name** (`CABLE="<name from jtagconfig>"`), never
-  index 1.
+- **Quartus.** `build_de25_soc.tcl` refuses to run inside the source tree.
+  It copies `fpga/hps/hps_subsystem.qsys` and `ip/hps_subsystem/*.ip` to
+  `build/fpga/hps/` on every run and points `QSYS_FILE` / `IP_FILE` at the
+  copies, because Quartus generates IP **next to the `.qsys`/`.ip` file**
+  (the `.qsys` refers to its `.ip` files by relative path, so the copy
+  resolves). Platform Designer GUI edits are made on
+  `fpga/hps/hps_subsystem.qsys`; do not press "Generate" there.
+- **`ALWAYS_REGENERATE_IP` does not generate IP on a fresh tree**:
+  synthesis fails with "The synthesis RTL for hps/hps_subsystem.qsys has
+  not been generated". `build.sh` runs `quartus_ipgenerate de25_soc -c
+  de25_soc` before `quartus_syn`. The old README's "nothing to run by
+  hand" was wrong; it only worked on a tree that still had generated IP.
+- **The tcl recreates the project** (`project_new -overwrite`) on every
+  run. It used to reopen an existing project and only add assignments, so
+  removed files and pins stayed in the `.qsf` ("Can't analyze file ...",
+  "Node ... does not exist in design").
+- **Generated VHDL.** `tools/write_githash.sh OUT_DIR` writes
+  `git_hash_pkg.vhd` into `build/fpga/` (hash 0 outside git); the file is
+  no longer tracked. `write_build_id.sh` follows the same pattern in A1.
+- **Linux.** `make_jic.sh` writes `build/images/de25_soc.jic` and reads
+  the `.sof` from `build/fpga/`; `build_de25_linux.sh` still writes
+  `linux/build_output/`. The Phase A rewrite (A2, A5) moves it to
+  `build/linux/` directly; do not first port the old script.
+  `linux/build_output/` (4.2 GB of old QPDS-tag clones) is deleted once
+  A2 has built.
+- **Fabric UART removed.** `communications.vhd`,
+  `serial_protocol_generic_pkg.vhd`, the `hVHDL_uart` submodule, the
+  `uart_rxd/uart_txd` ports, pins and false paths are gone;
+  `uart_register_block` is now `register_block`. LWH2F is the only bus
+  master. Before/after: the `.pin` files differ only in BE43/BK31 (now
+  unused), 909 -> 616 ALMs, 1659 -> 1198 registers, timing met.
+- **`tools/program.sh`** defaults to `build/fpga/output_files/de25_soc.sof`
+  and selects the cable by **name**: the only cable when there is one,
+  otherwise `CABLE="<name from jtagconfig>"` is required.
 
-Done: `git status --ignored` after `./build.sh all` shows nothing outside
-`build/`, `.claude/` and `linux/build_output/` (until A2). The `.pin` file
-(non-comment lines) and the fitter resource summary of `de25_soc` are
-the same before and after the move, apart from the fabric UART removal,
-which is a separate commit with its own before/after.
+Verified: with the same git hash, the out-of-tree build gives the same
+`.pin` file (non-comment lines) and fitter resource summary as an in-tree
+build of `953f138`. After `./build.sh fpga`, `git status --ignored` shows
+only `build/`, `.claude/` and `linux/build_output/`.
 
 ### Phase A - upstream boot stack, Alpine, FPGA-first
 
@@ -309,7 +319,7 @@ CPUs, U-Boot also in QSPI so a blank card still reaches a prompt.
   `tools/`, make it write into `build/fpga/` (0b3), and in
   `build_de25_soc.tcl` add the same `exec write_build_id.sh` guard +
   `VHDL_FILE build_id_pkg.vhd` as the Nano tcl. Wire it to register 19 and the board variant to register
-  18 in `uart_register_block.vhd` (two read-only registers - small change,
+  18 in `fpga/register_block.vhd` (two read-only registers - small change,
   do it here so every later core has them).
 - A1b (optional, decide now - it changes the periphery and therefore
   needs a new `.jic` every time it changes later): add `HPS_LED`/`HPS_KEY`
@@ -552,8 +562,7 @@ core deleted, the next power-on prints `core from QSPI`.
 
 Note for the Standard: between power-on and the core load the fabric I/O
 is tri-stated, so the MAX6650 runs at its power-up default (loud) for a
-few seconds, the LEDs are dark, and the fabric UART is dead. That is
-expected.
+few seconds and the LEDs are dark. That is expected.
 
 Fallback: `FPGA_FIRST=1` build + its `.jic`; the U-Boot with the preboot
 works with both (it skips when the fabric is configured).
@@ -811,8 +820,7 @@ traffic for the **entire** load with no time limit (a 120 s limit expired
 during a hung load and the next read hung the CPU). Clients must not
 resend non-idempotent requests after a read timeout. Without the GUI,
 `fpga-reload` SIGSTOPs every `/opt/de25web` process around the load.
-Standard extra: until 0b removes it, the fabric UART is another master -
-do not use it during a reload.
+(The Standard's fabric UART, a second master, was removed in 0b.)
 
 ### 5.10 Do not raw-poke the bridges from Linux
 On this board a hand-written write to `SYSMGR_FPGA_BRIDGE_CTRL`

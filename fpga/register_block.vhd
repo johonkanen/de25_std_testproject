@@ -1,28 +1,10 @@
 ------------------------------------------------------------------------
--- uart_register_block - the fpga_interconnect register file, reachable
--- over two independent masters:
---   * the fabric UART (fpga_communications, GPIO_D[0]/[1])
---   * the HPS lwhps2fpga (LWH2F) AXI4 bridge, when connected
+-- register_block - the fpga_interconnect register file, reached from the
+-- HPS over the lwhps2fpga (LWH2F) AXI4 bridge via axi_lwh2f_bridge.vhd
+-- (ported from ~/dev/datacenter_peak_shaving/fpga/agilex/de25/axi_led.vhd).
+-- The fabric UART master it used to have as well was removed.
 --
--- Extracted from de25_uart_top.vhd so de25_soc_top.vhd can wire the HPS's
--- lwhps2fpga_* ports straight into the same register file the fabric UART
--- already talks to, via axi_lwh2f_bridge.vhd (ported from
--- ~/dev/datacenter_peak_shaving/fpga/agilex/de25/axi_led.vhd). The
--- standalone de25_uart_top.vhd instantiates this block too, leaving the
--- axi_* ports unconnected - they all default to inert values, so that
--- build is otherwise unchanged.
---
--- Each register is decoded twice, once per master, into two SEPARATE
--- response accumulators (bus_from_top_uart / bus_from_top_axi) rather
--- than one shared one: a shared accumulator would let a same-cycle
--- read from one master briefly overwrite the other master's response
--- (both use address 0 as the "here is your read data" slot). Register
--- *storage* (loopback_register, led_register, ...) is still one copy,
--- shared by both masters - the split is only where each master's
--- response goes.
---
--- Register map (32 bit data, 16 bit address - see docs/de25_pinout.md
--- for the UART protocol; over LWH2F each register is a 16-byte-aligned
+-- Register map (32 bit data; over LWH2F each register is a 16-byte-aligned
 -- AXI offset, register N at byte offset 16*N, see axi_lwh2f_bridge.vhd):
 --   addr 1 : constant id      0x0000DE25   (read only)
 --   addr 2 : git hash                       (read only)
@@ -53,10 +35,8 @@ library ieee;
     use ieee.std_logic_1164.all;
     use ieee.numeric_std.all;
 
-entity uart_register_block is
+entity register_block is
     generic (
-        -- core clock (Hz) / baud rate.  50 MHz / 115200 = 434.
-        g_clock_divider : natural := 434
         -- power-on reset length in core-clock cycles (~100 ms at 50 MHz).
         -- Was ~21 ms (1_048_575); widened while chasing the LWH2F hang on
         -- the chance the lwhps2fpga bridge hard macro (see axi_bridge_reset
@@ -64,7 +44,7 @@ entity uart_register_block is
         -- settle before its reset releases. Turned out not to be the fix
         -- (axi_bridge_reset's own polarity was inverted, see below) - kept
         -- at 100ms anyway as a bit of extra margin, since it's free.
-        ;g_por_cycles   : natural := 4_999_999
+        g_por_cycles   : natural := 4_999_999
         -- fan speed after reset, in RPM - converted to the MAX6650's KTACH
         -- encoding for register 9's reset value (see
         -- source/fan_control/max6650_fan_control.vhd's header for the
@@ -82,14 +62,10 @@ entity uart_register_block is
         ;SW          : in  std_logic_vector(9 downto 0)     -- slide switches
         ;KEY         : in  std_logic_vector(3 downto 0)     -- push-buttons, active low
         ;LEDR        : out std_logic_vector(9 downto 0)     -- red user LEDs
-        ;uart_rxd    : in  std_logic                        -- fabric UART rx
-        ;uart_txd    : out std_logic                        -- fabric UART tx
 
         -- lwhps2fpga (LWH2F) AXI4 register access.  Runs on core_clock
         -- (de25_soc_top.vhd ties lwhps2fpga_axi_clock to the same 50 MHz
-        -- clock, so no clock-domain crossing is needed here).  Left
-        -- unconnected, every input defaults to idle / '0' and the bridge
-        -- never asserts a request - inert for the standalone de25_uart_top.
+        -- clock, so no clock-domain crossing is needed here).
         ;axi_awid    : in  std_logic_vector(3 downto 0)  := (others => '0')
         ;axi_awaddr  : in  std_logic_vector(28 downto 0) := (others => '0')
         ;axi_awvalid : in  std_logic := '0'
@@ -132,9 +108,9 @@ entity uart_register_block is
         ;FPGA_I2C_SCL : inout std_logic
         ;FPGA_I2C_SDA : inout std_logic
     );
-end entity uart_register_block;
+end entity register_block;
 
-architecture rtl of uart_register_block is
+architecture rtl of register_block is
 
     use work.fpga_interconnect_pkg.all;
 
@@ -143,10 +119,6 @@ architecture rtl of uart_register_block is
     signal reset_meta   : std_logic := '1';
     signal reset_sync   : std_logic := '1';
     signal system_reset : std_logic := '1';
-
-    signal bus_to_communications   : fpga_interconnect_record := init_fpga_interconnect;
-    signal bus_from_communications : fpga_interconnect_record := init_fpga_interconnect;
-    signal bus_from_top_uart       : fpga_interconnect_record := init_fpga_interconnect;
 
     signal bus_to_axi   : fpga_interconnect_record := init_fpga_interconnect;
     signal bus_from_axi : fpga_interconnect_record := init_fpga_interconnect;
@@ -231,31 +203,8 @@ begin
     test_registers : process (core_clock) is
     begin
         if rising_edge(core_clock) then
-            init_bus(bus_from_top_uart);
             init_bus(bus_from_top_axi);
 
-            -- ---- UART master ----
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 1, x"0000DE25");
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 2, work.git_hash_pkg.git_hash);
-            connect_data_to_address(bus_from_communications, bus_from_top_uart, 3, loopback_register);
-            if data_is_requested_from_address(bus_from_communications, 4) then
-                read_counter <= std_logic_vector(unsigned(read_counter) + 1);
-                write_data_to_address(bus_from_top_uart, 0, read_counter);
-            end if;
-            connect_data_to_address(bus_from_communications, bus_from_top_uart, 5, led_register);
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 6,
-                std_logic_vector(resize(unsigned(sw_sync), 32)));
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 7,
-                std_logic_vector(resize(unsigned(not key_sync), 32)));   -- KEY is active low
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 8,
-                std_logic_vector(uptime_counter));
-            connect_data_to_address(bus_from_communications, bus_from_top_uart, 9, fan_ktach_register);
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 10,
-                x"00" & fan_rpm & fan_tach0);
-            connect_read_only_data_to_address(bus_from_communications, bus_from_top_uart, 11,
-                (31 downto 10 => '0') & fan_i2c_error & fan_init_done & fan_config_readback);
-
-            -- ---- LWH2F (AXI) master - same registers ----
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 1, x"0000DE25");
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 2, work.git_hash_pkg.git_hash);
             connect_data_to_address(bus_from_axi, bus_from_top_axi, 3, loopback_register);
@@ -278,8 +227,7 @@ begin
 
             uptime_counter <= uptime_counter + 1;
 
-            bus_to_communications <= bus_from_top_uart;
-            bus_to_axi             <= bus_from_top_axi;
+            bus_to_axi <= bus_from_top_axi;
 
             if system_reset = '1' then
                 loopback_register     <= (others => '0');
@@ -287,25 +235,10 @@ begin
                 led_register          <= (others => '0');
                 uptime_counter        <= (others => '0');
                 fan_ktach_register    <= std_logic_vector(to_unsigned(c_fan_ktach_default, 32));
-                bus_to_communications <= init_fpga_interconnect;
                 bus_to_axi            <= init_fpga_interconnect;
             end if;
         end if;
     end process test_registers;
-
-------------------------------------------------------------------------
-    u_fpga_communications : entity work.fpga_communications
-    generic map (
-        fpga_interconnect_pkg => work.fpga_interconnect_pkg
-        ,g_clock_divider      => g_clock_divider
-    )
-    port map (
-        clock                    => core_clock
-        ,uart_rx                 => uart_rxd
-        ,uart_tx                 => uart_txd
-        ,bus_to_communications   => bus_to_communications
-        ,bus_from_communications => bus_from_communications
-    );
 
 ------------------------------------------------------------------------
     u_axi_lwh2f_bridge : entity work.axi_lwh2f_bridge

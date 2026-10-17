@@ -1,8 +1,7 @@
 ------------------------------------------------------------------------
 -- axi_lwh2f_bridge - AXI4 (the HPS's lwhps2fpga / LWH2F lightweight
 -- bridge) to fpga_interconnect converter, so the register block in
--- uart_register_block.vhd is reachable from HPS software over LWH2F,
--- exactly like it already is over the fabric UART.
+-- register_block.vhd is reachable from HPS software over LWH2F.
 --
 -- Ported from ~/dev/datacenter_peak_shaving/fpga/agilex/de25/axi_led.vhd
 -- (same author) - the state machine and the generic-package-parameter
