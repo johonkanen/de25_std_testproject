@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Refresh git_hash_pkg.vhd with the current short commit hash (8 hex digits).
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/../fpga"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "not a git repository - leaving git_hash_pkg.vhd unchanged" >&2

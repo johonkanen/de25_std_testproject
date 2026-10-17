@@ -10,7 +10,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOF="${SOF:-${HERE}/../output_files/de25_soc.sof}"
+SOF="${SOF:-${HERE}/../fpga/output_files/de25_soc.sof}"
 SPL="${SPL:-${HERE}/build_output/spl/u-boot-spl-dtb.hex}"
 JIC="${JIC:-${HERE}/build_output/de25_soc.jic}"
 
@@ -35,6 +35,6 @@ echo
 echo "wrote ${JIC}"
 echo
 echo "program it (needs the board on JTAG; on WSL2 forward the USB-Blaster II"
-echo "with usbipd first - see ../program.sh):"
+echo "with usbipd first - see ../tools/program.sh):"
 echo "    quartus_pgm -c 1 -m jtag -o \"pvi;${JIC}\""
 echo "then set MSEL for QSPI + HPS-first and power-cycle."

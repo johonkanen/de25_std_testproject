@@ -12,10 +12,10 @@ Where this is going: [docs/plan_upstream_hps_first_webgui.md](docs/plan_upstream
 
 | path | what |
 |------|------|
-| `de25_soc_top.vhd`, `uart_register_block.vhd`, `axi_lwh2f_bridge.vhd`, `h2f_user0_clk_heartbeat.vhd`, `de25_soc.sdc` | FPGA top level and register file |
-| `build_de25_soc.tcl` | creates the Quartus project (all assignments) |
-| `source/` | `hVHDL_uart`, `hVHDL_fpga_interconnect` (submodules), vendored `fpga_communication`, MAX6650 fan controller |
-| `hps/` | HPS + DDR4 EMIF Platform Designer system ([hps/README.md](hps/README.md)) |
+| `fpga/` | top level `de25_soc_top.vhd`, register file, LWH2F bridge, `de25_soc.sdc`, `build_de25_soc.tcl` (creates the Quartus project) |
+| `fpga/source/` | `hVHDL_uart`, `hVHDL_fpga_interconnect` (submodules), vendored `fpga_communication`, MAX6650 fan controller |
+| `fpga/hps/` | HPS + DDR4 EMIF Platform Designer system ([fpga/hps/README.md](fpga/hps/README.md)) |
+| `tools/` | `program.sh` (JTAG), `write_githash.sh` |
 | `linux/` | ATF / U-Boot / kernel build, device tree, QSPI image ([linux/README.md](linux/README.md)) |
 | `docs/` | pinout, fan controller, plan |
 
@@ -27,12 +27,14 @@ README's commit.
 
 ```
 git submodule update --init
-./write_githash.sh                 # stamp git_hash_pkg.vhd (optional)
+cd fpga
+../tools/write_githash.sh          # stamp git_hash_pkg.vhd (optional)
 quartus_sh  -t build_de25_soc.tcl
 quartus_syn de25_soc               # regenerates hps_subsystem (ALWAYS_REGENERATE_IP)
 quartus_fit de25_soc
 quartus_sta de25_soc
 quartus_asm de25_soc
+cd ..
 linux/build_de25_linux.sh
 linux/make_jic.sh
 ```
@@ -43,8 +45,8 @@ of the plan).
 ## Program (volatile JTAG load)
 
 ```
-./program.sh                       # output_files/de25_soc.sof
-./program.sh --check               # set up jtagd + jtagconfig only
+tools/program.sh fpga/output_files/de25_soc.sof
+tools/program.sh --check               # set up jtagd + jtagconfig only
 ```
 
 From WSL2 the on-board USB-Blaster must be attached first
