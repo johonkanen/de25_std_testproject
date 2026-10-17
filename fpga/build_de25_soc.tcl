@@ -13,11 +13,16 @@
 #                    over BOTH the fabric UART (GPIO_D[0]/[1]) and the
 #                    HPS's LWH2F, via axi_lwh2f_bridge.vhd.
 #
-# PROJECT_IP_REGENERATION_POLICY ALWAYS_REGENERATE_IP below means
-# quartus_syn regenerates hps_subsystem itself - no manual qsys-generate.
+# Out of tree: run from a build directory, never from the source tree.
+# The script copies hps/ (.qsys + .ip) there, because Quartus generates IP
+# next to the .qsys/.ip file, and writes git_hash_pkg.vhd there.
+# PROJECT_IP_REGENERATION_POLICY does not generate IP on a fresh tree, so
+# quartus_ipgenerate is needed before synthesis.
 #
-# Build:
-#   quartus_sh  -t build_de25_soc.tcl
+# Build (or just ./build.sh fpga from the repo root):
+#   mkdir -p build/fpga && cd build/fpga
+#   quartus_sh  -t ../../fpga/build_de25_soc.tcl
+#   quartus_ipgenerate de25_soc -c de25_soc
 #   quartus_syn de25_soc
 #   quartus_fit de25_soc
 #   quartus_sta de25_soc
@@ -31,6 +36,22 @@
 package require ::quartus::project
 
 variable this_file_path [file dirname [file normalize [info script]]]
+set repo_root [file dirname $this_file_path]
+set build_dir [file normalize [pwd]]
+
+if {$build_dir eq $repo_root || [string first "$this_file_path/" "$build_dir/"] == 0} {
+    puts "ERROR: run from a build directory (./build.sh fpga), not from the source tree"
+    exit 1
+}
+
+# Quartus generates IP next to the .qsys/.ip file: build from a copy.
+# Edit the originals in fpga/hps/.
+file mkdir hps/ip/hps_subsystem
+file copy -force $this_file_path/hps/hps_subsystem.qsys hps/
+foreach ip [glob -directory $this_file_path/hps/ip/hps_subsystem *.ip] {
+    file copy -force $ip hps/ip/hps_subsystem/
+}
+exec $repo_root/tools/write_githash.sh $build_dir
 
 set need_to_close_project 0
 if {[is_project_open]} {
@@ -76,7 +97,7 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_uart/uart_rx/
 set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_uart/uart_tx/uart_tx_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/serial_protocol_generic_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/communications.vhd
-set_global_assignment -name VHDL_FILE $this_file_path/git_hash_pkg.vhd
+set_global_assignment -name VHDL_FILE git_hash_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
 
 # MAX6650 fan controller (see source/fan_control/)
@@ -88,10 +109,10 @@ set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vh
 set_global_assignment -name VHDL_FILE $this_file_path/de25_soc_top.vhd
 
 # ---------------------------------------------------------- SoC HDL + IP
-set_global_assignment -name QSYS_FILE $this_file_path/hps/hps_subsystem.qsys
-set_global_assignment -name IP_FILE $this_file_path/hps/ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip
-set_global_assignment -name IP_FILE $this_file_path/hps/ip/hps_subsystem/hps_subsystem_emif_io96b_hps_0.ip
-set_global_assignment -name IP_FILE $this_file_path/hps/ip/hps_subsystem/hps_subsystem_s10_user_rst_clkgate_0.ip
+set_global_assignment -name QSYS_FILE hps/hps_subsystem.qsys
+set_global_assignment -name IP_FILE hps/ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip
+set_global_assignment -name IP_FILE hps/ip/hps_subsystem/hps_subsystem_emif_io96b_hps_0.ip
+set_global_assignment -name IP_FILE hps/ip/hps_subsystem/hps_subsystem_s10_user_rst_clkgate_0.ip
 set_global_assignment -name PROJECT_IP_REGENERATION_POLICY ALWAYS_REGENERATE_IP
 
 # ---------------------------------------------------------- constraints

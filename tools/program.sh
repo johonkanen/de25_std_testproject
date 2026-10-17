@@ -11,18 +11,19 @@
 #       usbipd attach --wsl --busid <b-p>
 #
 #   then, in WSL:
-#       ./program.sh                         # program output_files/de25_soc.sof
-#       ./program.sh path/to/other.sof       # program a specific file
-#       ./program.sh --check                 # set up + jtagconfig, don't program
-#       sudo ./program.sh --install-udev     # persistent 0666 rule (once)
+#       tools/program.sh                     # program build/fpga/output_files/de25_soc.sof
+#       tools/program.sh path/to/other.sof   # program a specific file
+#       tools/program.sh --check             # set up + jtagconfig, don't program
+#       sudo tools/program.sh --install-udev # persistent 0666 rule (once)
 #
-# Env overrides:  QUARTUS_BIN=...  CABLE=<index>  DEVICE=<jtag index, default 1>
+# Env overrides:  QUARTUS_BIN=...  CABLE=<name from jtagconfig, needed when
+#                 more than one cable is attached>  DEVICE=<jtag index, default 1>
 #
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
 QUARTUS_BIN="${QUARTUS_BIN:-$HOME/altera_pro/26.1.1/quartus/bin}"
-CABLE="${CABLE:-1}"
+CABLE="${CABLE:-}"
 DEVICE="${DEVICE:-1}"
 UDEV_RULE=/etc/udev/rules.d/51-usbblaster.rules
 
@@ -76,8 +77,15 @@ note "jtagconfig:"
 
 [ "${1:-}" = "--check" ] && exit 0
 
-SOF="${1:-output_files/de25_soc.sof}"
-[ -f "$SOF" ] || die "sof not found: $SOF  (build it first)"
+SOF="${1:-$(dirname "$0")/../build/fpga/output_files/de25_soc.sof}"
+[ -f "$SOF" ] || die "sof not found: $SOF  (./build.sh fpga first)"
 
-note "programming $SOF  (cable index $CABLE, jtag device @$DEVICE)"
+# --- cable by name, never by index: indices move when boards come and go -
+if [ -z "$CABLE" ]; then
+    mapfile -t CABLES < <("$QUARTUS_BIN/jtagconfig" 2>/dev/null | sed -nE 's/^[0-9]+\) (.*)$/\1/p')
+    [ "${#CABLES[@]}" -eq 1 ] || die "found ${#CABLES[@]} JTAG cables - pick one with CABLE=\"<name>\":$(printf '\n    %s' "${CABLES[@]}")"
+    CABLE="${CABLES[0]}"
+fi
+
+note "programming $SOF  (cable \"$CABLE\", jtag device @$DEVICE)"
 exec "$QUARTUS_BIN/quartus_pgm" -c "$CABLE" -m jtag -o "p;${SOF}@${DEVICE}"

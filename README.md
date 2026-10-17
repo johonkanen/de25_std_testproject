@@ -25,32 +25,31 @@ README's commit.
 
 ## Build
 
+Everything is built out of tree into `build/` (`BUILD_DIR=` moves it):
+
 ```
 git submodule update --init
-cd fpga
-../tools/write_githash.sh          # stamp git_hash_pkg.vhd (optional)
-quartus_sh  -t build_de25_soc.tcl
-quartus_syn de25_soc               # regenerates hps_subsystem (ALWAYS_REGENERATE_IP)
-quartus_fit de25_soc
-quartus_sta de25_soc
-quartus_asm de25_soc
-cd ..
-linux/build_de25_linux.sh
-linux/make_jic.sh
+./build.sh fpga        # -> build/fpga/output_files/de25_soc.sof
+./build.sh linux       # ATF + U-Boot + kernel (still in linux/build_output/ until Phase A)
+./build.sh jic         # -> build/images/de25_soc.jic
+./build.sh all
 ```
 
-Out-of-tree builds into a single `build/` directory are planned (Phase 0b
-of the plan).
+`fpga/build_de25_soc.tcl` refuses to run inside the source tree. It copies
+`fpga/hps/` into `build/fpga/hps/`, because Quartus generates IP next to the
+`.qsys`/`.ip` files, and writes `git_hash_pkg.vhd` there. Edit the
+originals in `fpga/hps/`.
 
 ## Program (volatile JTAG load)
 
 ```
-tools/program.sh fpga/output_files/de25_soc.sof
-tools/program.sh --check               # set up jtagd + jtagconfig only
+tools/program.sh                   # build/fpga/output_files/de25_soc.sof
+tools/program.sh --check           # set up jtagd + jtagconfig only
 ```
 
 From WSL2 the on-board USB-Blaster must be attached first
-(`usbipd attach --wsl --busid <b-p>` on Windows, after every replug).
+(`usbipd attach --wsl --busid <b-p>` on Windows, after every replug). With
+more than one cable attached, name it: `CABLE="<name from jtagconfig>"`.
 
 ## Register file
 

@@ -16,7 +16,7 @@
 #   sdcard.img                 FAT32 image: Image + dtb + itb + initramfs
 #
 # Then combine the SPL with the FPGA bitstream:
-#   quartus_pfg -c ../output_files/de25_soc.sof de25_soc.jic \
+#   quartus_pfg -c ../build/fpga/output_files/de25_soc.sof de25_soc.jic \
 #       -o device=MT25QU512 -o flash_loader=A5ED013BB32AE4SCS \
 #       -o hps_path=linux/build_output/spl/u-boot-spl-dtb.hex \
 #       -o mode=ASX4
@@ -50,7 +50,7 @@ TOOLCHAIN_URL="https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/b
 TOOLCHAIN_DIR="arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu"
 CROSS_PREFIX="aarch64-none-linux-gnu-"
 
-SOF="${SOF:-${HERE}/../output_files/de25_soc.sof}"
+SOF="${SOF:-${BUILD_DIR:-${HERE}/../build}/fpga/output_files/de25_soc.sof}"
 
 # mformat/mcopy: from PATH, or set MTOOLS_BIN to a dir holding them
 [[ -n "${MTOOLS_BIN:-}" ]] && export PATH="${MTOOLS_BIN}:${PATH}"
@@ -149,7 +149,7 @@ echo "  build_output/  ready:"
 echo "    sdcard.img  Image  socfpga_agilex5_de25.dtb  u-boot.itb"
 echo "    initramfs.cpio  bl31.bin  spl/u-boot-spl-dtb.hex"
 echo
-echo "  next:  ./linux/make_jic.sh      # SPL + de25_soc.sof -> de25_soc.jic"
+echo "  next:  ./build.sh jic           # SPL + de25_soc.sof -> build/images/de25_soc.jic"
 echo "         then flash sdcard.img to SD, program the .jic, set MSEL for"
 echo "         QSPI+HPS-first, power-cycle.  Console = HPS UART (CP2105) @115200."
 echo "==================================================================="

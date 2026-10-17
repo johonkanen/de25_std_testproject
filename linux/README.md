@@ -42,7 +42,7 @@ needs). Overrides:
 |-----|-----|
 | `CROSS_TOOLCHAIN=<dir>` | use an existing toolchain (dir with `bin/aarch64-none-linux-gnu-gcc`) instead of downloading |
 | `MTOOLS_BIN=<dir>` | where `mformat`/`mcopy` live if `mtools` isn't installed system-wide |
-| `SOF=<path>` | FPGA `.sof` (default `output_files/de25_soc.sof`) |
+| `SOF=<path>` | FPGA `.sof` (default `build/fpga/output_files/de25_soc.sof`) |
 | `QPDS_REF=<tag>` | git tag on the altera-fpga repos (match your Quartus version) |
 
 ## Build
@@ -78,7 +78,7 @@ Agilex 5 boots HPS-first: the **SPL + FPGA bitstream go in a JIC** (QSPI),
 the **kernel + rootfs go on the SD card**.
 
 ```
-./linux/make_jic.sh          # -> linux/build_output/de25_soc.jic (verified: 0 errors)
+./build.sh jic               # -> build/images/de25_soc.jic
 ```
 
 `make_jic.sh` runs `quartus_pfg` for the DE25-Standard's **Micron MT25QU128**
@@ -88,8 +88,8 @@ and device `A5ED013BB32AE4SCS`. Then:
 
 1. `dd` `sdcard.img` to the SD card
 2. attach the board (on WSL2, `usbipd attach` the on-board USB-Blaster II —
-   see [`../program.sh`](../program.sh)), then
-   `quartus_pgm -c 1 -m jtag -o "pvi;linux/build_output/de25_soc.jic"`
+   see [`../tools/program.sh`](../tools/program.sh)), then
+   `quartus_pgm -c "<cable name>" -m jtag -o "pvi;build/images/de25_soc.jic"`
 3. set MSEL for QSPI + HPS-first per the DE25-Standard manual §"Set the MSEL"
 4. power-cycle; console on the HPS UART (CP2105) @ 115200
 

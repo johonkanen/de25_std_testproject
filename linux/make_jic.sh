@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Combine the FPGA bitstream + U-Boot SPL into a QSPI flash image (.jic)
 # for the DE25-Standard.  Run linux/build_de25_linux.sh first (for the SPL)
-# and build de25_soc.sof (quartus_syn/fit/asm) at the repo root.
+# and build de25_soc.sof (./build.sh fpga).
 #
-#   ./linux/make_jic.sh
+#   ./build.sh jic      (or ./linux/make_jic.sh)
 #
 # The SPL boots from QSPI, then loads u-boot.itb / Image / dtb / initramfs
 # from the SD card (sdcard.img), so only SPL+bitstream go in the .jic.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOF="${SOF:-${HERE}/../fpga/output_files/de25_soc.sof}"
+BUILD_DIR="${BUILD_DIR:-${HERE}/../build}"
+SOF="${SOF:-${BUILD_DIR}/fpga/output_files/de25_soc.sof}"
 SPL="${SPL:-${HERE}/build_output/spl/u-boot-spl-dtb.hex}"
-JIC="${JIC:-${HERE}/build_output/de25_soc.jic}"
+JIC="${JIC:-${BUILD_DIR}/images/de25_soc.jic}"
 
 # DE25-Standard: Micron MT25QU128 QSPI flash (128Mb/16MB - confirmed by
 # quartus_pgm's own JTAG autodetect; MT25QU512/512Mb was wrong, carried
@@ -24,6 +25,7 @@ FLASH_LOADER="${FLASH_LOADER:-A5ED013BB32AE4SCS}"
 
 [[ -f "${SOF}" ]] || { echo "missing ${SOF} - build the FPGA first"; exit 1; }
 [[ -f "${SPL}" ]] || { echo "missing ${SPL} - run build_de25_linux.sh first"; exit 1; }
+mkdir -p "$(dirname "${JIC}")"
 
 quartus_pfg -c "${SOF}" "${JIC}" \
     -o hps_path="${SPL}" \

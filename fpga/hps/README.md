@@ -59,19 +59,21 @@ already what this project wants).
 
 ## Building
 
-Nothing to run by hand: `build_de25_soc.tcl` sets
-`PROJECT_IP_REGENERATION_POLICY ALWAYS_REGENERATE_IP`, so `quartus_syn`
-regenerates `hps_subsystem` itself from the `QSYS_FILE`/`IP_FILE`
-assignments. To inspect the generated component port list (e.g. after
-re-vendoring), run once:
+`./build.sh fpga` from the repo root. `build_de25_soc.tcl` copies
+`hps_subsystem.qsys` and `ip/hps_subsystem/*.ip` into `build/fpga/hps/`
+and the project uses the copies, because Quartus writes generated IP next
+to the `.qsys`/`.ip` file. `PROJECT_IP_REGENERATION_POLICY
+ALWAYS_REGENERATE_IP` does **not** generate IP on a fresh build directory
+(synthesis fails with "The synthesis RTL for hps/hps_subsystem.qsys has
+not been generated"), so `build.sh` runs `quartus_ipgenerate de25_soc -c
+de25_soc` first.
 
-```
-qsys-generate hps_subsystem.qsys --synthesis=VHDL --part=A5ED013BB32AE4SCS --search-path='ip/hps_subsystem,$'
-```
-which writes `hps_subsystem/hps_subsystem_inst.vhd` — the source for the
-`component hps_subsystem` declaration in `de25_soc_top.vhd`. Generated
-trees (`hps_subsystem/`, `ip/hps_subsystem/hps_subsystem_*_0/`) are
-git-ignored; only the `.qsys` and `.ip` files are tracked.
+Edit the files here, in `fpga/hps/`. When the Platform Designer GUI is
+needed (a port-list change), open `fpga/hps/hps_subsystem.qsys`, save, and
+do not press Generate: generating writes output into the source tree. To
+inspect the generated component port list, use the copy:
+`build/fpga/hps/hps_subsystem/hps_subsystem_inst.vhd` is the source for
+the `component hps_subsystem` declaration in `de25_soc_top.vhd`.
 
 ## ✅ H2F User0 clock (HPS-generated free-running clock to fabric)
 

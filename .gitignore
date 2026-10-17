@@ -1,47 +1,9 @@
-# Quartus build output
-dni/
-qdb/
-db/
-incremental_db/
-output_files/
-tmp-clearbox/
-.qsys_edit/
-*.qws
-*.rpt
-*.summary
-*.pin
-*.sof
-*.pof
-*.jdi
-*.sld
-*.qdf
-c5_pin_model_dump.txt
-serv_req_info.txt
-de25_soc.qsf
-de25_soc.qpf
-*.qpf.bak
+# everything generated lives here (./build.sh, BUILD_DIR=... to move it)
+/build/
 
-# generated HPS/EMIF IP - keep the .ip source + scripts, drop the trees
-hps/hps_subsystem/
-hps/ip/hps_subsystem/hps_subsystem_*_0/
-hps/dni/
-hps/qdb/
-hps/IpUpgradeLog.xml
-hps/**/*.qpf
-hps/**/*.qsf
+# old in-tree Linux build; replaced by build/linux in Phase A of
+# docs/plan_upstream_hps_first_webgui.md
+/linux/build_output/
 
-# python
 __pycache__/
 *.pyc
-
-# roll-your-own linux build
-linux/build_output/
-*.BAK.ip
-
-# Quartus-generated board-migration metadata, regenerated per project open
-hps/board.info
-
-# scratch combined .sof images from embedding an HPS binary for JTAG load
-# (quartus_pfg -c output_files/*.sof out.sof -o hps_path=...) - never a
-# build output the project ships or tracks
-/out*.sof
