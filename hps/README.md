@@ -33,13 +33,9 @@ generator this replaces) — smaller HPS config, smaller pin file.
 | `F2H` (ACE5-Lite) | disabled |
 | F2H interrupts | enabled, exported as `fpga2hps_interrupt_irq0/1` |
 
-`lwhps2fpga` and the F2H interrupts are exported from `hps_subsystem` but
-**not yet wired to anything in the fabric** — `de25_soc_top.vhd` ties the
-manager inputs idle (`awready`/`wready`/`arready` low, response channels
-zero) and the interrupts to `0`. The register block in `de25_uart_top`
-still only talks over its own GPIO UART. Point `lwhps2fpga` at
-`fpga_interconnect` (or any AXI-Lite slave) to make it reachable from HPS
-software.
+`lwhps2fpga` is wired through `axi_lwh2f_bridge.vhd` into the register
+file (`uart_register_block.vhd`) and is hardware-confirmed; the F2H
+interrupts are tied to `0` in `de25_soc_top.vhd`.
 
 ## Removing `iopll_0`
 
@@ -159,7 +155,5 @@ kind of thing headlessly again:
 
 ## Status
 
-Synthesizes as part of `de25_soc_top` (see the top-level README's build
-log). Same hardware-verification status as before this refactor: the
-fabric side has been programmed and confirmed on a real DE25-Standard; the
-HPS/EMIF bring-up itself has not — see the top-level README.
+Builds as part of `de25_soc_top`; HPS, DDR4, SD, EMAC0, UART1 and LWH2F
+are hardware-confirmed (Linux boots from SD, see `linux/README.md`).

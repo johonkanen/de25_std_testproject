@@ -68,7 +68,7 @@ reset value - `1500 -> KTACH 78` with `KSCALE = 2`.
 Terasic's own `auto_fan.v` curve minimum is 3500 RPM (its "Speed8", the
 quietest point in their validated 3500-6000 RPM auto-fan ramp) - that was
 the starting default. From there, `g_fan_min_rpm` was walked down by
-rebuilding `de25_uart` (no HPS, so no payload-embedding step - much
+rebuilding the (since removed) fabric-only `de25_uart` build (no HPS - much
 faster to iterate than `de25_soc`) and reprogramming over JTAG each step,
 listening each time:
 

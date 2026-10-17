@@ -1,4 +1,4 @@
-# DE25-Standard pin notes for `de25_uart`
+# DE25-Standard pin notes
 
 All pin/IO-standard values are taken from the Terasic golden top
 (`~/dev/de25_std/Demonstration/FPGA/golden_top/golden_top.qsf`) for the
@@ -38,7 +38,7 @@ an auto-direction shifter, move `uart_txd` to a plain output-capable pin).
 ## Repointing the pins
 
 Edit the two `set_location_assignment` lines for `uart_rxd` / `uart_txd`
-in `build_de25_uart.tcl` and re-run `quartus_sh -t build_de25_uart.tcl`.
+in `build_de25_soc.tcl` and re-run `quartus_sh -t build_de25_soc.tcl`.
 
 ## Using a PLL instead of the raw 50 MHz clock
 

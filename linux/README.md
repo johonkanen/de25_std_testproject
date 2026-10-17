@@ -155,7 +155,7 @@ exactly as they do over the fabric UART. **The LWH2F bridge itself is
 fixed and hardware-confirmed working.**
 
 **Update, later the same day — also resolved.** The *original* bare-metal
-test (`hps/baremetal_lwh2f_regs/`) kept hanging on its own self-test read
+test (`hps/baremetal_lwh2f_regs/`, since removed - see git history) kept hanging on its own self-test read
 even with the RTL fix. Installing a real EL3 exception vector table (never
 present before - `VBAR_EL3` stayed at its power-on-reset value of `0x0`)
 showed it wasn't a hang at all: a clean synchronous external abort
@@ -169,7 +169,7 @@ BL2, entirely separate from the bridge-enable sequence. Replicating those
 same three register writes in the bare-metal test before the read fixed it
 completely - confirmed on hardware (`self-test: register 1 (id) =
 0x0000DE25 -> PASS`, plus a manual write/read round-trip). See
-`hps/baremetal_lwh2f_regs/README.md` for the full trail, including why a
+the removed `hps/baremetal_lwh2f_regs/README.md` (git history) for the full trail, including why a
 real JTAG debugger halt wasn't viable in this environment (tried first).
 
 ## Session status (2026-09-08)

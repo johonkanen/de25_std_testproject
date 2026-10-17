@@ -17,8 +17,6 @@ tmp-clearbox/
 *.qdf
 c5_pin_model_dump.txt
 serv_req_info.txt
-de25_uart.qsf
-de25_uart.qpf
 de25_soc.qsf
 de25_soc.qpf
 *.qpf.bak
@@ -32,13 +30,6 @@ hps/IpUpgradeLog.xml
 hps/**/*.qpf
 hps/**/*.qsf
 
-# simulation
-sim/work/
-sim/*.o
-sim/*.fst
-sim/*.vcd
-sim/*.ghw
-
 # python
 __pycache__/
 *.pyc
@@ -47,19 +38,8 @@ __pycache__/
 linux/build_output/
 *.BAK.ip
 
-# freertos QSPI/SD-boot experiment - build output only, no tracked sources
-freertos/build_output/
-
 # Quartus-generated board-migration metadata, regenerated per project open
 hps/board.info
-
-# bare-metal HPS test build output (see hps/baremetal_uart1_test/README.md)
-hps/baremetal_uart1_test/build/
-hps/baremetal_lwh2f_regs/build/
-# hps/baremetal-drivers is a `git clone` per that README (or, locally, a
-# symlink to one) - no trailing slash so this also matches the symlink case
-# (a trailing slash would only match a real directory, not a symlink to one).
-hps/baremetal-drivers
 
 # scratch combined .sof images from embedding an HPS binary for JTAG load
 # (quartus_pfg -c output_files/*.sof out.sof -o hps_path=...) - never a

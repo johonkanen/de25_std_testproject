@@ -11,16 +11,13 @@
 #       usbipd attach --wsl --busid <b-p>
 #
 #   then, in WSL:
-#       ./program.sh                         # program output_files/de25_uart.sof
+#       ./program.sh                         # program output_files/de25_soc.sof
 #       ./program.sh path/to/other.sof       # program a specific file
 #       ./program.sh --check                 # set up + jtagconfig, don't program
 #       sudo ./program.sh --install-udev     # persistent 0666 rule (once)
 #
 # Env overrides:  QUARTUS_BIN=...  CABLE=<index>  DEVICE=<jtag index, default 1>
 #
-# NOTE: the UART for test_uart.py is NOT this cable.  It is the external
-# 3.3 V USB-serial adapter wired to GPIO_D[0]/GPIO_D[1] (see README), which
-# enumerates as its own /dev/ttyUSB* .
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -79,7 +76,7 @@ note "jtagconfig:"
 
 [ "${1:-}" = "--check" ] && exit 0
 
-SOF="${1:-output_files/de25_uart.sof}"
+SOF="${1:-output_files/de25_soc.sof}"
 [ -f "$SOF" ] || die "sof not found: $SOF  (build it first)"
 
 note "programming $SOF  (cable index $CABLE, jtag device @$DEVICE)"
