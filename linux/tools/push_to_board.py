@@ -27,11 +27,11 @@ import time
 # The DE25-Standard's HPS console, by id (ttyUSB numbers move with whatever
 # else is plugged in). HPS UART1 is on dedicated HPS pins to the board's
 # USB-UART: a CP2105 on boards with a separate USB-UART port, or a channel
-# of the FT2232H inside the USB-Blaster III on rev D (one Type-C). The
+# of the USB-Blaster III (interface 1; 0 is JTAG) on rev D (one Type-C). The
 # DE25-Nano is never matched, so a tool that writes the SD card cannot hit
 # the wrong board. Override with --serial or DE25_STD_CONSOLE.
 CONSOLE_PATTERNS = (
-    "/dev/serial/by-id/usb-TERASIC_DE25-Standard_*-if03-port0",
+    "/dev/serial/by-id/usb-TERASIC_DE25-Standard_*-if01-port0",
     "/dev/serial/by-id/usb-Silicon_Labs_CP2105_*-if00-port0",
 )
 

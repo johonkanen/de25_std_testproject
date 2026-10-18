@@ -91,7 +91,7 @@ derived from upstream's Nano DTs plus Terasic's Standard DTs.
 | RTC | **PCF85263A at 0x51 on HPS I2C1, CR1220 battery holder** | none | with a coin cell the clock survives power-off: `CONFIG_RTC_DRV_PCF85363=y`, `hwclock -s` in `rc.local`, NTP still for TLS |
 | other HPS I2C1 devices | ADXL345 accelerometer | - | optional GUI later |
 | board temperature | ADT7461 on the fan I2C bus (Terasic `BOARD_MANAGEMENT.v`) | AMC6821 reads one | optional register later |
-| JTAG | on-board USB-Blaster III (repo `program.sh` says Download Cable II - check `jtagconfig`) | USB-Blaster II | cable *name* in all `quartus_pgm` commands; never `-c 1` when more than one board is attached |
+| JTAG | on-board USB-Blaster III: `jtagconfig` lists `DE25-Standard [1-1-iface0]`; the HPS console is interface 1 of the same USB device (`usb-TERASIC_DE25-Standard_<serial>-if01-port0`) | USB-Blaster II | cable *name* in all `quartus_pgm` commands; never `-c 1` when more than one board is attached |
 | MSEL | SW10 = `001` (AS fast, QSPI) - the default | AS/QSPI | no change |
 
 ### 3.2 Files: what carries over from the Nano repo
@@ -314,7 +314,7 @@ Differences from the steps below, and findings:
   or `sd_recover.py` does the same). Includes `eth-watchdog` and the clean
   shutdown order from §5.14/§5.14b.
 - **A7, never the wrong board.** `push_to_board.default_console()` matches
-  only `TERASIC_DE25-Standard` (if03) or CP2105 by-id names and never a
+  only `TERASIC_DE25-Standard` (if01) or CP2105 by-id names and never a
   `DE25-Nano` one; with nothing found the tools stop and list the ports
   (`--serial` or `DE25_STD_CONSOLE` then). With only the Nano attached, a
   fallback to the Nano's port would have let `sd_recover.py` rewrite the
@@ -529,7 +529,10 @@ TFTP server under WSL2, CRC32 check, `gzwrite mmc 0`) is unchanged.
 
 **[HW] A8. Bring-up order**
 
-1. Program the FPGA-first `.jic` (`quartus_pgm -c "<cable>" -m jtag -o "pvi;build/images/de25_std.jic"`).
+1. Program the FPGA-first `.jic` (`quartus_pgm -c "DE25-Standard [1-1-iface0]" -m jtag -o "pvi;build/images/de25_std.jic"`;
+   the cable name as `jtagconfig` lists it on 2026-10-18). **Check the result before power-cycling**: the
+   Nano once got "Erase failed on flash chip select 0 at address 0x00C00000" with the flash below it
+   already erased - no boot; the same `.jic` programmed again worked.
    The card may be blank: the SPL falls back to U-Boot in QSPI.
 2. Power-cycle; `python3 linux/tools/sd_recover.py` writes the Alpine
    image and boots it. First boot runs `apk add python3` (needs internet).
@@ -556,6 +559,18 @@ first.
 
 **B1. Default to HPS-first** in `build_de25_soc.tcl`: `"HPS FIRST"` unless
 `FPGA_FIRST=1`. Rebuild.
+
+**B1b. Watchdog triggers a remote update**: HPS IP parameter
+`Rst_sdm_wd_config` 0 -> 2 ("trigger remote update") in
+`fpga/hps/hps_subsystem.tcl` and
+`fpga/hps/ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip`, as the
+Nano's `bd41771`. Needed only by Phase F's fallback, but it changes the HPS
+configuration and so the periphery hash (§5.11): set now, before the first
+manifest-carrying core (E1), no core built in B-E stops matching when RSU
+comes. Without an RSU layout a watchdog timeout then has no other image to
+load - check on the board that a plain-layout HPS-first boot still comes
+up and that U-Boot's 30 s watchdog is serviced through to Linux
+(`watchdog.open_timeout` default: no expiry until a program opens it).
 
 **B2. `make_jic.sh`**: detect an HPS-first `.sof` with
 `quartus_pfg -c "${SOF}" "${CORE_RBF}" -o hps_core_only=ON` (refused for
@@ -768,12 +783,59 @@ has no manifest).
 
 ### Phase F - later
 
-- **RSU** (phase 1 + U-Boot updates with SDM fallback): follow
-  `nano:docs/remote_system_update_plan.md` and step 2 of
-  `nano:docs/plan_2026-10-17.md`. `CONFIG_INTEL_STRATIX10_RSU=y` is already
-  in A2; its probe fails (`getting RSU status -14`, SDM error 0xc) until
-  the flash has an RSU layout. HPS-first slots are small (phase 1 ~0.4 MB);
-  each slot's matching core must travel with it.
+- **RSU** (phase 1 + U-Boot + core updates with SDM fallback). Done and
+  tested on the Nano 2026-10-18 (`60752c9`..`dfec54d`, R1-R7); port it
+  step by step. Reference: `nano:docs/remote_system_update_plan.md`,
+  `nano:docs/network_updates.md` (the recipes). Steps:
+  - **F1 flash layout** (`make_jic.sh RSU=1`, the Nano's default): BOOT_INFO
+    0x000000-0x20FFFF (RSU makes it 0x210000 long), FACTORY_IMAGE 0x220000
+    (1 MB), SPT0/1 0x320000/0x328000, CPB0/1 0x330000/0x338000, P1 0x400000
+    (1 MB), SSBL.FACTORY_IM 0x500000, SSBL.P1 0x600000, UBOOT 0xA00000,
+    CORE.FACTORY_IM 0xC00000, CORE.P1 0xD10000. **Fixed addresses**:
+    quartus_pfg 26.1.1 stops with an internal error on "auto" here. Check
+    our sizes: FPGA-first P1 is ~0.7 MB today, HPS-first phase 1 ~0.4 MB;
+    u-boot.itb ~0.9 MB fits 1 MB SSBL slots.
+  - **F2 per-image U-Boot**: `CONFIG_SOCFPGA_RSU_MULTIBOOT`; the SPL loads
+    `u-boot_<slot>.itb` from the card, else QSPI `SSBL.<slot>`;
+    `make_sdcard_image.sh` writes `u-boot_P1.itb` and
+    `u-boot_FACTORY_IMAGE.itb`.
+  - **F3 bundle**: `make_jic.sh` also writes `de25_std_app.rpd` (start
+    address 0, bitswapped); `linux/tools/make_rsu_bundle.py` (reproducible
+    tar.gz: app.rpd, u-boot.itb, core + manifest, `rsu.json` with size +
+    SHA-256 each; `--check`). Add `board: "de25-std"` to `rsu.json` and
+    refuse a Nano bundle on the board (as D/E do).
+  - **F3b a core per image**: `nano:linux/patches/u-boot-rsu-running-slot.patch`
+    (`rsu running_slot <var>`); the preboot loads
+    `de25_std_<slot>.core.rbf` from the card, else `CORE.<slot>`;
+    `fpga_access.py` keeps cores in `/lib/firmware/rsu/<slot>/`.
+  - **F4 userspace**: static `rsu_client` (altera-fpga/intel-rsu, pinned,
+    + zlib 1.3.1) from `build_de25_linux.sh`, `/etc/librsu.rc` `root qspi
+    /dev/mtd1`. **The Linux DT needs two QSPI partitions**: "u-boot"
+    0x0-0x31FFFF read-only (boot info + factory image; nothing in Linux
+    can write it) and "root" from SPT0 0x320000 - librsu reads "Bad SPT0
+    magic number" from one partition at 0x0, which is what
+    `linux/dts/socfpga_agilex5_de25_std.dts` has today (A4, plain layout).
+  - **F5 boot confirmation**: B1b's `Rst_sdm_wd_config` 2;
+    `nano:linux/board/rsu-confirm.sh` (first line of rc.local) pets the
+    watchdog until `/api/board` says `"id_ok": true`, then confirms; not
+    healthy after 300 s -> the SDM loads the factory image. The factory
+    image only reports (shared rootfs). Kernel `watchdog.open_timeout=120`
+    in extlinux.conf.
+  - **F6 network update**: `fpga_access.py` op `install_rsu` behind
+    `POST/GET /api/rsu`, `linux/tools/deploy_rsu.py`, the GUI "FPGA image"
+    card. Order: check everything, erase P1 first, SSBL.P1 + CORE.P1, card
+    and /lib/firmware copies, image last with `--add --verify`, then
+    `reboot_image` = P1's address (`rsu_client --request` of the running
+    slot does not reload it).
+  - **[HW] F7 fault tests** as the Nano's R7: no token / wrong SHA /
+    truncated or corrupt parts / core bundle / too big refused before any
+    write; power cut after the P1 erase boots the factory image and a
+    re-deploy from there works; a hung or never-healthy P1 falls back. Not
+    a corrupt image with a matching manifest (SDM hang risk, §5.8).
+  - Nano notes to keep: librsu's relocation differs from quartus_pfg's in
+    two pointer bytes, so `--verify` fails against a `.jic`-written slot
+    (passes after `--add`; both boot); after a slot switch the console is
+    silent until the preboot has loaded the core (HPS-first).
 - **Partial reconfiguration** of the blinkers:
   `nano:docs/partial_reconfiguration_plan.md` (written for the Nano; the
   same structure applies with 10 LEDs).
@@ -1043,3 +1105,4 @@ need the board.
 | Does the ethernet RX stall seen on the Nano happen here? | 20 warm reboots + 20 power cycles with the health check logging |
 | Is rstmgr `BRGMODRST` readable from Linux userspace in HPS-first mode (C2 guard)? | `python3` mmap read of `0x10d1102c` on the board (it was readable from Linux on 2026-09-08); if not, use `/sys/class/fpga_manager/fpga0/state` |
 | HEX and blinker additions: do they fit the periphery you want to freeze before Phase E? | decide before the first manifest-carrying `.jic` |
+| With `Rst_sdm_wd_config` 2 (B1b) and the plain layout, does a watchdog timeout just reset or hang the board? | B6: let U-Boot's watchdog expire at its prompt once (`wdt stop` not run, wait 30 s), someone at the power switch |
