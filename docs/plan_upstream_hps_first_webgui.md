@@ -894,12 +894,34 @@ written after a good load, so a power cut leaves the old or the new core.
 
 ### 5.14 Ethernet
 U-Boot's `NET_RANDOM_ETHADDR` gives a new MAC every boot (A6 sets a fixed
-one in Linux). Occasionally eth0 stops receiving after boot (link up, no
-RX; seen after warm reboots), and `ip link set eth0 down; ip link set eth0 up`
-recovers it - under investigation on the Nano. Plan a link health check:
-a loop (in `rc.local` background or the supervisor) that pings the
-gateway every 30 s and, after 3 misses with the link up, bounces eth0 and
-logs it. Adopt the Nano's root-cause fix when it exists.
+one in Linux). On the Nano (Linux 6.18.20, XGMAC + KSZ9031), about 1 in 5
+warm reboots (none seen after power-on) eth0 has link but passes no
+traffic, in two forms: the RX DMA stops (SMMU `F_TRANSLATION` faults on
+the EMAC descriptor rings at the first open, then a fatal bus error;
+frames reach the MAC and overflow its FIFO, `rx_packets` stays 0), or
+transmitted frames are lost after the MAC (the MAC counts them, the host
+never sees the ARP replies). Ruled out there: the old kernel's DMA running
+across the reboot (stopping eth0 before `reboot` did not help) and the PHY
+delay mode (`rgmii-id` breaks the Nano's link every time - its board
+carries the delays; check the Standard's own PHY wiring before choosing).
+`ip link set eth0 down; ip link set eth0 up` clears both. Copy the Nano's
+workaround: `linux/board/eth-watchdog.sh`, installed as
+`/usr/sbin/eth-watchdog` and respawned from inittab - it pings the gateway
+(every 5 s for 2 minutes after boot, then every 30 s), bounces eth0 after
+3 misses, restores the default route (a link down flushes it) and logs to
+the kernel log. Test warm reboots in a loop (15+) before relying on
+network-confirmed reboots (RSU). Adopt the Nano's root-cause fix when it
+exists.
+
+### 5.14b Clean shutdown (busybox init)
+Busybox init runs the `::shutdown` actions before it kills any process.
+With the web GUI running (logs open for writing), `::shutdown:/bin/umount
+-a -r` cannot remount / read-only, so every reboot resets a read-write
+root. On the Nano a run of ~20 test reboots broke the ext4 journal ("error
+loading journal", -74, boot loop) and the card had to be rewritten. Use the
+Nano's inittab order: `killall5 -15`, `sleep 2`, `killall5 -9`, then
+`umount -a -r`; check the console shows `re-mounted ... ro` before
+`reboot: Restarting system`. Do this before any reboot loop testing.
 
 ### 5.15 Clock and DNS at boot
 The Nano has no RTC: the clock starts at 1970, `apk` fails TLS until
