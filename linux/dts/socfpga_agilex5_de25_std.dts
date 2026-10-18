@@ -117,14 +117,14 @@
 };
 
 /*
- * The SDM gives the QSPI controller a 500 MHz reference clock (U-Boot:
- * "QSPI: Reference clock at 500000 kHz"), not the dtsi's 200 MHz. With
- * 200 MHz Linux runs the flash ~2.5x too fast: shifted JEDEC id, bulk reads
- * different every time (found on the DE25-Nano). Check the U-Boot line on
- * this board (plan §5.4).
+ * The SDM gives the QSPI controller its reference clock, not the dtsi's
+ * fixed 200 MHz: 400 MHz on this board (the SPL: "QSPI: Reference clock at
+ * 400000 kHz", 2026-10-18), 500 MHz on the DE25-Nano. With a wrong value
+ * Linux runs the flash at the wrong speed: shifted JEDEC id, bulk reads
+ * different every time (found on the DE25-Nano). Plan §5.4.
  */
 &qspi_clk {
-	clock-frequency = <500000000>;
+	clock-frequency = <400000000>;
 };
 
 &smmu {

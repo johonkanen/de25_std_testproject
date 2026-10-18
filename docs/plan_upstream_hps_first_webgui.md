@@ -1,7 +1,7 @@
 # Plan: DE25-Standard to upstream boot, HPS-first, network updates, web GUI
 
-Status 2026-10-18: Phase 0b done; Phase A built end to end without the
-board (A1-A7, see "Phase A progress"), A8 (hardware bring-up) not started.
+Status 2026-10-18: Phase 0b and Phase A done - the upstream stack boots
+Alpine on the board (A8 results under "Phase A progress"). Next: Phase B.
 Branch `upstream-hps-first`. §2 describes the
 repository *before* Phase 0b; paths elsewhere are the new ones (`fpga/`,
 `tools/`, `build/`). The reference implementation is the sister repository
@@ -278,8 +278,8 @@ only `build/`, `.claude/` and `linux/build_output/`.
 
 ### Phase A - upstream boot stack, Alpine, FPGA-first
 
-**Phase A progress (2026-10-18): A1-A7 built, nothing tested on the
-board.** `./build.sh fpga linux jic sdcard` produce
+**Phase A progress (2026-10-18): A1-A7 built, A8 passed on the board
+(results after the A8 steps).** `./build.sh fpga linux jic sdcard` produce
 `build/fpga/output_files/de25_soc.sof`, `build/linux/out/*`,
 `build/images/de25_std.jic` and `build/images/sdcard.img.gz`. Checklist
 tests 1 (`HPS_A76_CORE_SELECTION_DUAL`) and 2 (build reruns cleanly) pass.
@@ -544,13 +544,39 @@ TFTP server under WSL2, CRC32 check, `gzwrite mmc 0`) is unchanged.
    three times = the same as the `u-boot.itb` bytes at `0xA00000` on the
    host (`dd if=build/linux/out/u-boot.itb ... | sha256sum`,
    padded to the same length). Not just the JEDEC id.
-5. LWH2F from U-Boot and Linux: `md.l 0x20000010 1` -> `0000de25`;
+5. LWH2F from U-Boot and Linux: `md.l 0x20000010 1` -> `0000de25`
+   (**only after `bridge enable`** - it is in `bootcmd`, so a stopped
+   autoboot has the bridges in reset and the read is a Synchronous Abort
+   and a CPU reset; seen 2026-10-18);
    in Linux a Python mmap read of register 1 (no SIGBUS).
 6. **Reboot test only after a power-on boot** (§5.6): power-cycle,
    `reboot`, it must come back.
 
 Fallback: the current Terasic-U-Boot card and the old `.jic`; or step A3's
 interim Terasic U-Boot.
+
+**A8 results (2026-10-18, card backed up first, `.jic` from `5221ca0`):**
+
+| check | result |
+|---|---|
+| `.jic` over JTAG (`DE25-Standard [1-1-iface0]`) | erase, program, verify OK in 33 s; no erase failure |
+| SPL 2026.04 from QSPI | DDR4 1 GiB calibrated; **SD works** (the A3 PHY values): loaded u-boot.itb from the card - first the old card's Terasic U-Boot 2025.01, after the rewrite our 2026.04. The Terasic one booted at all because the SPL and its ATF/U-Boot FIT are compatible |
+| QSPI reference clock | **400 MHz** (`QSPI: Reference clock at 400000 kHz`), not the Nano's 500 - Linux DT changed to 400 MHz (§5.4) |
+| `sd_recover.py` | from the Terasic U-Boot: model check, TFTP 21 MB, CRC32 match, `gzwrite` 805306368 bytes, boot; first boot `apk add python3` over the internet |
+| Linux 6.18.20 | 4 CPUs (2x `0xd05` A55, 2x `0xd0b` A76), `soc64hwmon`, `fpga0`, `/proc/mtd` "u-boot" 16 MB; `stratix10-rsu` probe -14 as expected (no RSU layout) |
+| QSPI bulk read | 3x the 953752 bytes at 0xA00000 = SHA-256 of the programmed `u-boot.itb`; the first 3 MB twice identical |
+| Ethernet | KSZ9031 at reg 1, `rgmii` (not `-id`), 1 Gbps/Full; `192.168.1.223` free, ping both ways; fixed MAC from `/etc/de25/mac` |
+| RTC | PCF85263 at `rtc0`, `hwclock -r` works; it came up at 2000-01-01 - no (or a flat) CR1220 cell; NTP sets it |
+| LWH2F from Linux (after our U-Boot's `bridge enable`, `BRGMODRST` 0x0) | reg 1 `0000de25`, 2 = git hash `4c5aed81`, 3 loopback, 4 counts, 18 `53544400`, 19 = build id `6ad4f6d2`, 8 counts ~50 MHz; no SIGBUS. With the Terasic U-Boot `BRGMODRST` was 0xf (it does not enable the bridges) |
+| reboot after a power-on boot | `re-mounted ... ro`, `Restarting system`, SPL -> U-Boot -> Linux -> eth0 up |
+| `poweroff` | the shell stops answering (output not captured) |
+
+Left over, not blocking: our U-Boot also tries an environment in UBI
+(`Loading Environment from UBI ... Cannot find mtd partition "root"`) -
+harmless noise from the Agilex 5 defconfig, nothing is saved; the
+QSPI holds the `u-boot.itb` built before the 400 MHz DT change (U-Boot
+unchanged in function); `build/images/de25_std.jic` is regenerated -
+program it with the next `.jic` (Phase B).
 
 ### Phase B - HPS-first, preboot core loader, fpga-reload
 
@@ -894,6 +920,8 @@ instead of `20 bb 18`), bulk reads different every time. Fix:
 read of known content** compared on the host, three times - a wrong
 `cdns,read-delay` can pass the id read and still corrupt data. Check the
 U-Boot line on the Standard too; if it differs, use its value.
+**Standard, 2026-10-18:** the SPL prints `QSPI: Reference clock at 400000 kHz`;
+`linux/dts/socfpga_agilex5_de25_std.dts` sets 400 MHz.
 
 ### 5.5 ATF and U-Boot DDR patches
 ATF: `config_ddr_size = hw_ddr_size` (else `DDR: Configured DDR size is
@@ -1097,7 +1125,7 @@ need the board.
 | Which `/dev/serial/by-id/` entry is the HPS console (CP2105 vs FT2232H / USB-Blaster III - depends on the board revision; Terasic's working U-Boot branch says "revC") | Phase 0 step 4; also read the board's silkscreen revision |
 | JTAG cable name for this board | `jtagconfig` |
 | Is `192.168.1.223` free on the LAN? | ask the user / `ping` before use |
-| Does the SDM report 500 MHz for the QSPI reference clock here too? | U-Boot `QSPI: Reference clock at ... kHz` |
+| Does the SDM report 500 MHz for the QSPI reference clock here too? | **No: 400 MHz** (SPL, 2026-10-18); the Linux DT uses it |
 | Is a CR1220 cell fitted? | `hwclock -r` after a power-off |
 | Fan: max rpm, and is reg 10's `rpm = 60 x Tach0Count` right with the 0.5 s count window (Count register 0x01)? | C7: compare with a phone tachometer/strobe or by ear at known targets |
 | Safe fan rpm under full CPU load (no MAX6650 fail-safe) | C7: `stress`-like load on 4 cores, fan at 1500 vs 4000 rpm, watch the die sensors |

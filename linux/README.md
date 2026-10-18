@@ -20,7 +20,7 @@ Neither upstream tree has a DE25-Standard, so this directory carries them.
 | `build_de25_linux.sh` | clones, patches and builds ATF, U-Boot, kernel (`./build.sh linux`) |
 | `make_jic.sh` | QSPI image: phase 1 + SPL, U-Boot at 0xA00000, HPS-first core at 0xC00000 (`./build.sh jic`) |
 | `uboot/socfpga_agilex5_de25_std{.dts,-u-boot.dtsi,_defconfig}` | U-Boot board support; the `-u-boot.dtsi` carries the SD PHY values of Terasic's working U-Boot |
-| `dts/socfpga_agilex5_de25_std.dts` | Linux device tree (EMAC0, SD, UART1, I2C1 + RTC, QSPI with the 500 MHz reference clock, SoC sensors) |
+| `dts/socfpga_agilex5_de25_std.dts` | Linux device tree (EMAC0, SD, UART1, I2C1 + RTC, QSPI with the SDM's 400 MHz reference clock, SoC sensors) |
 | `tools/make_sdcard_image.sh`, `tools/alpine_rootfs_config.sh` | the SD card image, without root (`./build.sh sdcard`) |
 | `tools/sd_recover.py`, `tools/tftp_server.py` | write the card from U-Boot over TFTP |
 | `tools/push_to_board.py` | push a file to the running board (`nc`, driven over the console) |
