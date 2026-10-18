@@ -1,9 +1,5 @@
 # everything generated lives here (./build.sh, BUILD_DIR=... to move it)
 /build/
 
-# old in-tree Linux build; replaced by build/linux in Phase A of
-# docs/plan_upstream_hps_first_webgui.md
-/linux/build_output/
-
 __pycache__/
 *.pyc

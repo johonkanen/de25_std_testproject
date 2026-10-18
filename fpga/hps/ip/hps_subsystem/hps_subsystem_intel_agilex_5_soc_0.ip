@@ -4059,12 +4059,12 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="Pwr_a76_core2_on" type="bit">
           <ipxact:name>Pwr_a76_core2_on</ipxact:name>
           <ipxact:displayName>A76 Core2 Power On</ipxact:displayName>
-          <ipxact:value>false</ipxact:value>
+          <ipxact:value>true</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="Pwr_a76_core3_on" type="bit">
           <ipxact:name>Pwr_a76_core3_on</ipxact:name>
           <ipxact:displayName>A76 Core3 Power On</ipxact:displayName>
-          <ipxact:value>false</ipxact:value>
+          <ipxact:value>true</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="Pwr_cpu_app_select" type="int">
           <ipxact:name>Pwr_cpu_app_select</ipxact:name>

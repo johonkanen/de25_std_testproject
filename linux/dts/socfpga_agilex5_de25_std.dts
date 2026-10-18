@@ -1,0 +1,217 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Terasic DE25-Standard (Agilex 5 A5ED013BB32AE4SCS), for this repo's
+ * de25_soc HPS pin mux: EMAC0, SD/MMC, UART1, I2C1, QSPI. No USB0, SPIM0,
+ * HPS_LED or HPS_KEY in the pin mux.
+ *
+ * Derived from upstream socfpga_agilex5_de25_nano.dts (linux-socfpga
+ * socfpga-6.18.20-lts) and Terasic's socfpga_agilex5_de25s.dts
+ * (terasic/linux-socfpga de25-standard-6.12.11-lts). Copied into the
+ * kernel tree by linux/build_de25_linux.sh.
+ */
+#include "socfpga_agilex5.dtsi"
+
+/ {
+	model = "SoCFPGA Agilex5 Terasic DE25-Standard";
+	compatible = "intel,socfpga-agilex5-socdk", "intel,socfpga-agilex5";
+
+	aliases {
+		serial0 = &uart1;
+		ethernet0 = &gmac0;
+		i2c1 = &i2c1;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		/* We expect the bootloader to fill in the reg */
+		reg = <0x0 0x80000000 0x0 0x0>;
+	};
+};
+
+/* KSZ9031RN at MDIO address 1. Terasic uses "rgmii" (delays on the PCB),
+ * as upstream's DE25-Nano DT does; "rgmii-id" is the fallback to try
+ * (plan §7). */
+&gmac0 {
+	status = "okay";
+	phy-mode = "rgmii";
+	phy-handle = <&emac0_phy0>;
+
+	max-frame-size = <9000>;
+
+	mdio0 {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		compatible = "snps,dwmac-mdio";
+		emac0_phy0: ethernet-phy@0 {
+			reg = <1>;
+		};
+	};
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+/* PCF85263A RTC (CR1220 cell holder); ADXL345 at 0x53 not described */
+&i2c1 {
+	status = "okay";
+
+	rtc@51 {
+		compatible = "nxp,pcf85263";
+		reg = <0x51>;
+	};
+};
+
+/* 3.3 V-only card slot: vqmmc is the fixed card supply */
+&mmc {
+	status = "okay";
+
+	no-1-8-v;
+	disable-wp;
+	cap-sd-highspeed;
+	bus-width = <4>;
+	vmmc-supply = <&sd_emmc_power>;
+	vqmmc-supply = <&sd_emmc_power>;
+	max-frequency = <200000000>;
+	sdhci-caps = <0x00000000 0x0000c800>;
+	sdhci-caps-mask = <0x00002007 0x0000ff00>;
+};
+
+&sd_io_1v8_reg {
+	status = "disabled";
+};
+
+&osc1 {
+	clock-frequency = <25000000>;
+};
+
+&qspi {
+	status = "okay";
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <100000000>;
+		m25p,fast-read;
+		cdns,read-delay = <2>;
+		cdns,tshsl-ns = <50>;
+		cdns,tsd2d-ns = <50>;
+		cdns,tchsh-ns = <4>;
+		cdns,tslch-ns = <4>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			rsu-handle = <&qspi_boot>;
+
+			qspi_boot: partition@0 {
+				label = "u-boot";
+				reg = <0x0 0x01000000>;
+			};
+		};
+	};
+};
+
+/*
+ * The SDM gives the QSPI controller a 500 MHz reference clock (U-Boot:
+ * "QSPI: Reference clock at 500000 kHz"), not the dtsi's 200 MHz. With
+ * 200 MHz Linux runs the flash ~2.5x too fast: shifted JEDEC id, bulk reads
+ * different every time (found on the DE25-Nano). Check the U-Boot line on
+ * this board (plan §5.4).
+ */
+&qspi_clk {
+	clock-frequency = <500000000>;
+};
+
+&smmu {
+	status = "okay";
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&watchdog0 {
+	status = "okay";
+};
+
+&watchdog1 {
+	status = "okay";
+};
+
+&watchdog2 {
+	status = "okay";
+};
+
+&watchdog3 {
+	status = "okay";
+};
+
+&watchdog4 {
+	status = "okay";
+};
+
+&temp_volt {
+	voltage {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		input@2 {
+			label = "0.8V VCC";
+			reg = <2>;
+		};
+
+		input@3 {
+			label = "1.8V VCCIO_SDM";
+			reg = <3>;
+		};
+
+		input@4 {
+			label = "1.8V VCCPT";
+			reg = <4>;
+		};
+
+		input@5 {
+			label = "1.2V VCCCRCORE";
+			reg = <5>;
+		};
+
+		input@6 {
+			label = "0.9V VCCH";
+			reg = <6>;
+		};
+
+		input@7 {
+			label = "0.8V VCCL";
+			reg = <7>;
+		};
+	};
+
+	temperature {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		input@0 {
+			label = "Main Die SDM";
+			reg = <0x0>;
+		};
+
+		input@10001 {
+			label = "Main Die corner bottom left max";
+			reg = <0x10000>;
+		};
+
+		input@30001 {
+			label = "Main Die corner bottom right max";
+			reg = <0x30000>;
+		};
+
+		input@40001 {
+			label = "Main Die corner top right max";
+			reg = <0x40000>;
+		};
+	};
+};

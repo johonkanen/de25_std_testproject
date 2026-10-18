@@ -3,13 +3,13 @@
 #
 #   ./build.sh fpga-project   create or refresh the Quartus project in build/fpga
 #   ./build.sh fpga           ... and compile it -> build/fpga/output_files/de25_soc.sof
+#                             (HPS_FIRST=1: an HPS-first image)
 #   ./build.sh linux          ATF + U-Boot + kernel (linux/build_de25_linux.sh)
-#   ./build.sh jic            QSPI image -> build/images/de25_soc.jic
-#   ./build.sh all            fpga, linux, jic
+#   ./build.sh jic            QSPI image -> build/images/de25_std.jic
+#   ./build.sh sdcard         SD card image -> build/images/sdcard.img.gz
+#   ./build.sh all            fpga, linux, jic, sdcard
 #
 # Env: BUILD_DIR (default build/), QUARTUS_BIN.
-# The Linux build still writes linux/build_output/ until its Phase A
-# rewrite (docs/plan_upstream_hps_first_webgui.md).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +27,7 @@ fpga() {
     fpga_project
     (
         cd "${FPGA_DIR}"
+        "${ROOT}/tools/write_build_id.sh" "${FPGA_DIR}"
         quartus_ipgenerate de25_soc -c de25_soc
         quartus_syn de25_soc
         quartus_fit de25_soc
@@ -39,11 +40,14 @@ linux() { "${ROOT}/linux/build_de25_linux.sh"; }
 
 jic() { "${ROOT}/linux/make_jic.sh"; }
 
+sdcard() { "${ROOT}/linux/tools/make_sdcard_image.sh"; }
+
 case "${1:-}" in
     fpga-project) fpga_project ;;
     fpga)         fpga ;;
     linux)        linux ;;
     jic)          jic ;;
-    all)          fpga; linux; jic ;;
+    sdcard)       sdcard ;;
+    all)          fpga; linux; jic; sdcard ;;
     *)            sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

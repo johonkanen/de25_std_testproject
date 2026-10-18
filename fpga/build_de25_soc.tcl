@@ -14,7 +14,8 @@
 #
 # Out of tree: run from a build directory, never from the source tree.
 # The script copies hps/ (.qsys + .ip) there, because Quartus generates IP
-# next to the .qsys/.ip file, and writes git_hash_pkg.vhd there.
+# next to the .qsys/.ip file, and writes git_hash_pkg.vhd and
+# build_id_pkg.vhd there.
 # PROJECT_IP_REGENERATION_POLICY does not generate IP on a fresh tree, so
 # quartus_ipgenerate is needed before synthesis.
 #
@@ -51,6 +52,10 @@ foreach ip [glob -directory $this_file_path/hps/ip/hps_subsystem *.ip] {
     file copy -force $ip hps/ip/hps_subsystem/
 }
 exec $repo_root/tools/write_githash.sh $build_dir
+# build id, register 19 (build.sh stamps a new one before every quartus_syn)
+if {![file exists build_id_pkg.vhd]} {
+    exec $repo_root/tools/write_build_id.sh $build_dir
+}
 
 set need_to_close_project 0
 if {[is_project_open]} {
@@ -87,10 +92,27 @@ set_global_assignment -name PWRMGT_VOLTAGE_OUTPUT_FORMAT "LINEAR FORMAT"
 set_global_assignment -name PWRMGT_LINEAR_FORMAT_N "-12"
 set_global_assignment -name POWER_APPLY_THERMAL_MARGIN ADDITIONAL
 
+# QSPI belongs to the HPS: the SPL and U-Boot read U-Boot proper (and, for
+# HPS-first images, the FPGA core) from it. With SDM ownership the SPL's
+# first QSPI-controller access stalls the bus (seen on the DE25-Nano).
+set_global_assignment -name QSPI_OWNERSHIP HPS
+#
+# HPS_FIRST=1 (environment): "HPS FIRST" - the SDM configures only the HPS
+# I/O, DDR I/O and the SPL; U-Boot's preboot loads the FPGA core
+# (de25_std.core.rbf, from linux/make_jic.sh). Default for now: "AFTER
+# INIT_DONE", the whole FPGA before the HPS starts (plan Phase A; Phase B
+# makes HPS-first the default).
+if {[info exists ::env(HPS_FIRST)] && $::env(HPS_FIRST) == 1} {
+    set_global_assignment -name HPS_INITIALIZATION "HPS FIRST"
+} else {
+    set_global_assignment -name HPS_INITIALIZATION "AFTER INIT_DONE"
+}
+
 # ---------------------------------------------------------- fabric HDL
 set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_fpga_interconnect/fpga_interconnect_generic_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/fpga_interconnect_16bit_pkg.vhd
 set_global_assignment -name VHDL_FILE git_hash_pkg.vhd
+set_global_assignment -name VHDL_FILE build_id_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
 
 # MAX6650 fan controller (see source/fan_control/)

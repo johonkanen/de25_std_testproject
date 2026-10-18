@@ -1,108 +1,65 @@
-# linux/ — roll-your-own Linux for `de25_soc`
+# linux/ — Linux for the DE25-Standard (`de25_soc`)
 
-A **first-cut** Linux build for the minimal `de25_soc` FPGA design (Agilex 5,
-all FPGA↔HPS bridges disabled). Structure follows Altera's
-`agilex5e-ed-gsrd` "roll-your-own" script.
+Altera upstream boot stack plus this repo's board files, no Terasic forks
+(plan: [../docs/plan_upstream_hps_first_webgui.md](../docs/plan_upstream_hps_first_webgui.md),
+Phase A):
 
-> ✅ **The build runs end to end** (Quartus 26.1.1, `QPDS26.1.1_REL_GSRD_PR`)
-> and produces every artifact below.
-> ✅ **Booted to a live root shell on hardware**, via SD card, kernel
-> 6.18.20 — see [Session status (2026-09-08)](#session-status-2026-09-08)
-> below. This required **Terasic's own u-boot-socfpga fork**
-> (`de25-standard-v2025.01`), not the upstream `socfpga_agilex5_de25_nano`
-> DT this fragment/script still point at — **`de25_uboot.config-fragment`
-> and `build_de25_linux.sh` have not been updated to that fork yet**; the
-> SD boot that actually worked used a separately-built U-Boot (see below).
-> The Linux kernel's own `socfpga_agilex5_de25.dts` booted fine as-is
-> (EMAC0/KSZ9031 came up, SD/MMC read the rootfs) — its board-specific
-> guesses (RGMII skew, USB PHY/hub, I2C map) are unverified beyond that.
+| piece | source |
+|---|---|
+| ATF BL31 | `altera-fpga/arm-trusted-firmware` `socfpga_v2.14.1`, patched: `config_ddr_size = hw_ddr_size` |
+| U-Boot SPL + proper | `altera-fpga/u-boot-socfpga` `socfpga_v2026.04`, patched: single-port EMIF; board files from `uboot/` |
+| kernel | `altera-fpga/linux-socfpga` `socfpga-6.18.20-lts`, DT from `dts/` |
+| rootfs | Alpine 3.24 aarch64 minirootfs on SD partition 2 (ext4) |
+
+Neither upstream tree has a DE25-Standard, so this directory carries them.
 
 ## Files
 
 | file | what |
-|------|------|
-| `build_de25_linux.sh` | orchestrator — toolchain shim, ATF, U-Boot, kernel, toybox initramfs, `sdcard.img` |
-| `dts/socfpga_agilex5_de25.dts` | **Linux** device tree (EMAC0/KSZ9031, SD/MMC, UART1 console, USB0, I2C1, SPIM0; **no bridge nodes**) |
-| `de25_uboot.config-fragment` | onto `socfpga_agilex5_defconfig` — DT = upstream `socfpga_agilex5_de25_nano`, SD boot, no NAND, bootcmd |
-| `de25_kernel.config-fragment` | onto arm64 `defconfig` — `CONFIG_MICREL_PHY` etc. |
+|---|---|
+| `build_de25_linux.sh` | clones, patches and builds ATF, U-Boot, kernel (`./build.sh linux`) |
+| `make_jic.sh` | QSPI image: phase 1 + SPL, U-Boot at 0xA00000, HPS-first core at 0xC00000 (`./build.sh jic`) |
+| `uboot/socfpga_agilex5_de25_std{.dts,-u-boot.dtsi,_defconfig}` | U-Boot board support; the `-u-boot.dtsi` carries the SD PHY values of Terasic's working U-Boot |
+| `dts/socfpga_agilex5_de25_std.dts` | Linux device tree (EMAC0, SD, UART1, I2C1 + RTC, QSPI with the 500 MHz reference clock, SoC sensors) |
+| `tools/make_sdcard_image.sh`, `tools/alpine_rootfs_config.sh` | the SD card image, without root (`./build.sh sdcard`) |
+| `tools/sd_recover.py`, `tools/tftp_server.py` | write the card from U-Boot over TFTP |
+| `tools/push_to_board.py` | push a file to the running board (`nc`, driven over the console) |
+| `board/eth-watchdog.sh` | bounces eth0 when it passes no traffic (from the DE25-Nano) |
 
-## Prerequisites
-
-Linux host, internet, ~25 GB free, and:
-```
-git wget xz-utils bc bison flex libssl-dev python3 mtools dosfstools
-```
-Quartus 26.1.1 in `PATH` (for the `quartus_pfg` JIC step).
-
-The script auto-downloads the **ARM GNU `aarch64-none-linux-gnu`** toolchain
-(the landley musl one the Altera reference uses lacks the LTO plugin ATF
-needs). Overrides:
-
-| env | for |
-|-----|-----|
-| `CROSS_TOOLCHAIN=<dir>` | use an existing toolchain (dir with `bin/aarch64-none-linux-gnu-gcc`) instead of downloading |
-| `MTOOLS_BIN=<dir>` | where `mformat`/`mcopy` live if `mtools` isn't installed system-wide |
-| `SOF=<path>` | FPGA `.sof` (default `build/fpga/output_files/de25_soc.sof`) |
-| `QPDS_REF=<tag>` | git tag on the altera-fpga repos (match your Quartus version) |
+Everything is written to `build/`: clones in `build/linux/src/`, binaries
+in `build/linux/out/`, images (`.jic`, `sdcard.img.gz`) in `build/images/`.
 
 ## Build
 
 ```
-./build.sh fpga     # 1. FPGA -> build/fpga/output_files/de25_soc.sof
-./build.sh linux    # 2. Linux
+./build.sh fpga        # FPGA-first .sof (HPS_FIRST=1 for an HPS-first one)
+./build.sh linux       # CROSS_TOOLCHAIN=<dir> to use an existing aarch64 toolchain
+./build.sh jic
+./build.sh sdcard
 ```
 
-Outputs in `linux/build_output/` (sizes from a real run):
+Host packages: `git wget bc bison flex libssl-dev python3 dtc mtools
+fakeroot e2fsprogs fdisk`, Quartus Pro 26.1.1, `pyserial` for the tools.
 
-| file | ~size | from |
-|------|------:|------|
-| `bl31.bin` | 60 KB | ARM Trusted Firmware, `PLAT=agilex5` |
-| `u-boot.itb` | 830 KB | U-Boot proper (FIT, contains BL31) |
-| `spl/u-boot-spl-dtb.hex` | 530 KB | first-stage loader → goes in the JIC |
-| `Image` | 48 MB | Linux kernel (arm64 `defconfig` + fragment) |
-| `socfpga_agilex5_de25.dtb` | 23 KB | this repo's Linux DT |
-| `initramfs.cpio` | 7 MB | toybox `mkroot` rootfs |
-| `sdcard.img` | 96 MB | FAT32: `Image` + `.dtb` + `u-boot.itb` + `initramfs.cpio` |
+## Install (needs the board)
 
-## Boot media
+1. Program the `.jic`: `quartus_pgm -c "<cable>" -m jtag -o "pvi;build/images/de25_std.jic"`.
+   The card may be blank: the SPL falls back to U-Boot in QSPI.
+2. Power-cycle, then `python3 linux/tools/sd_recover.py --serial <console>`
+   writes `build/images/sdcard.img.gz` to the card from U-Boot and boots it.
+   It refuses unless the running U-Boot's device tree says DE25-Standard.
+3. The board comes up at `192.168.1.223` (`BOARD_IP=` at image build),
+   hostname `de25-std`, a fixed MAC from `/etc/de25/mac`, `/boot`
+   unmounted.
 
-Agilex 5 boots HPS-first: the **SPL + FPGA bitstream go in a JIC** (QSPI),
-the **kernel + rootfs go on the SD card**.
+Not yet tested on hardware - see the plan, A8, for the bring-up order and
+checks. The old Terasic-U-Boot card and the 2026-09-08 binaries
+(`~/de25_std_known_good_2026-09-08/`) are the fallback.
 
-```
-./build.sh jic               # -> build/images/de25_soc.jic
-```
+## History
 
-`make_jic.sh` runs `quartus_pfg` for the DE25-Standard's **Micron MT25QU128**
-(128Mb/16MB — confirmed by `quartus_pgm`'s own JTAG autodetect; an earlier
-MT25QU512/512Mb assumption was wrong and never flash-verified) QSPI flash
-and device `A5ED013BB32AE4SCS`. Then:
-
-1. `dd` `sdcard.img` to the SD card
-2. attach the board (on WSL2, `usbipd attach` the on-board USB-Blaster II —
-   see [`../tools/program.sh`](../tools/program.sh)), then
-   `quartus_pgm -c "<cable name>" -m jtag -o "pvi;build/images/de25_soc.jic"`
-3. set MSEL for QSPI + HPS-first per the DE25-Standard manual §"Set the MSEL"
-4. power-cycle; console on the HPS UART (CP2105) @ 115200
-
-Boot flow: SDM → SPL (DDR) → ATF BL31 → U-Boot → `booti` Image + dtb +
-initramfs → shell in RAM.
-
-## From here
-
-- **Real rootfs**: build Buildroot or drop a Debian arm64 tarball onto an
-  ext4 partition 3, then in `de25_uboot.config-fragment` change
-  `root=/dev/ram0` → `root=/dev/mmcblk0p3 rootwait` and remove the
-  `initramfs.cpio` fatload from `CONFIG_BOOTCOMMAND`.
-- **Pure-SD boot** (no QSPI): write the SPL/bitstream combo to an SD
-  partition of type `0xA2` instead of the JIC — see the Altera GSRD
-  `flash_image.pfg` for the layout.
-- **DT hardening**: fill in the KSZ9031 MDIO address, `rgmii` vs
-  `rgmii-id` skew, SD card-detect GPIO, USB3300 PHY + USB251xb hub reset,
-  and the I2C device tree from the DE25-Standard schematic.
-- **HPS↔FPGA comms**: if you ever need it, re-enable `LWH2F_Width` in
-  `hps/disable_bridges.py`, add the bridge back to the Qsys wiring and a
-  `soc2fpga`/`lwsoc2fpga` node to the DT.
+The sections below are the 2026-09 bring-up log, with the in-tree build
+and Terasic's U-Boot fork; the files they name are in git history.
 
 ## Session status (2026-09-09) — LWH2F root cause found and fixed
 

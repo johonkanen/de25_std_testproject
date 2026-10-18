@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * U-Boot additions for the DE25-Standard, after upstream's
+ * socfpga_agilex5_de25_nano-u-boot.dtsi.
+ */
+
+#include "socfpga_agilex5-u-boot.dtsi"
+
+/{
+	aliases {
+		spi0 = &qspi;
+		freeze_br0 = &freeze_controller;
+	};
+
+	soc {
+		freeze_controller: freeze_controller@0x20000450 {
+			compatible = "altr,freeze-bridge-controller";
+			reg = <0x20000450 0x00000010>;
+			status = "disabled";
+		};
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		u-boot,spl-boot-order = &mmc,&flash0,&nand,"/memory";
+	};
+};
+
+&flash0 {
+	compatible = "jedec,spi-nor";
+	spi-tx-bus-width = <4>;
+	spi-rx-bus-width = <4>;
+	bootph-all;
+	/delete-property/ cdns,read-delay;
+};
+
+&flash1 {
+	bootph-all;
+};
+
+&i3c0 {
+	bootph-all;
+};
+
+&i3c1 {
+	bootph-all;
+};
+
+&gpio1 {
+	portb: gpio-controller@0 {
+		bootph-all;
+	};
+};
+
+&sd_emmc_power {
+	bootph-all;
+};
+
+/*
+ * SD/MMC. The PHY values are the registers Terasic's working
+ * de25-standard-v2025.01 U-Boot programs (its cdns,combophy driver turns
+ * the board's cdns,phy-* / cdns,hrs* fields into these):
+ *   DQS timing 0x00780000 (ext/lpbk/phony DQS), gate/loopback 0x81a40040
+ *   (sync, rd_del_sel 52, underrun suppress, gate always on), DLL master
+ *   0x00a000fe (bypass, phase detect 2, start point 254), DLL slave 0
+ *   (no read/write DQS delays), DQ timing 0x28000001 (io mask end 5,
+ *   oe end 1), HRS09 0x1800c, HRS10 0x30000 (hcsdclkadj 3), HRS16 0,
+ *   HRS07 0x000a0000 (rw compensate 10).
+ * Terasic uses one set for every speed; here it goes into both the
+ * default-speed and the high-speed tables of upstream's sdhci-cadence6.
+ * Upstream's DE25-Nano DT puts 0x00a000fe in the DLL *slave* register
+ * (read DQS delay 254, write DQS delay 160 in bypass mode) - with the
+ * Nano's DT this board timed out on every SD command.
+ * 3.3 V only: vqmmc is the fixed card supply, no-1-8-v.
+ */
+&mmc {
+	status = "okay";
+	disable-wp;
+	cap-sd-highspeed;
+	no-mmc;
+	no-1-8-v;
+	vmmc-supply = <&sd_emmc_power>;
+	vqmmc-supply = <&sd_emmc_power>;
+	max-frequency = <200000000>;
+	sdhci-caps = <0x00000000 0x0000c800>;
+	/* SD card default speed (DS) and UHS-I SDR12 */
+	cdns,phy-dqs-timing-delay-sd-ds = <0x00780000>;
+	cdns,phy-gate-lpbk-ctrl-delay-sd-ds = <0x81a40040>;
+	cdns,phy-dll-master-ctrl-sd-ds = <0x00a000fe>;
+	cdns,phy-dll-slave-ctrl-sd-ds = <0x00000000>;
+	cdns,phy-dq-timing-delay-sd-ds = <0x28000001>;
+	cdns,ctrl-hrs09-timing-delay-sd-ds = <0x0001800c>;
+	cdns,ctrl-hrs10-lpbk-ctrl-delay-sd-ds = <0x00030000>;
+	cdns,ctrl-hrs16-slave-ctrl-sd-ds = <0x00000000>;
+	cdns,ctrl-hrs07-timing-delay-sd-ds = <0x000a0000>;
+	/* SD card high speed and UHS-I SDR25 */
+	cdns,phy-dqs-timing-delay-sd-hs = <0x00780000>;
+	cdns,phy-gate-lpbk-ctrl-delay-sd-hs = <0x81a40040>;
+	cdns,phy-dll-master-ctrl-sd-hs = <0x00a000fe>;
+	cdns,phy-dll-slave-ctrl-sd-hs = <0x00000000>;
+	cdns,phy-dq-timing-delay-sd-hs = <0x28000001>;
+	cdns,ctrl-hrs09-timing-delay-sd-hs = <0x0001800c>;
+	cdns,ctrl-hrs10-lpbk-ctrl-delay-sd-hs = <0x00030000>;
+	cdns,ctrl-hrs16-slave-ctrl-sd-hs = <0x00000000>;
+	cdns,ctrl-hrs07-timing-delay-sd-hs = <0x000a0000>;
+	bootph-all;
+};
+
+&qspi {
+	status = "okay";
+};
+
+&nand {
+	bootph-all;
+};
+
+&timer0 {
+	bootph-all;
+};
+
+&timer1 {
+	bootph-all;
+};
+
+&timer2 {
+	bootph-all;
+};
+
+&timer3 {
+	bootph-all;
+};
+
+&watchdog0 {
+	bootph-all;
+};
+
+/* KSZ9031RN at MDIO address 1; Terasic's Standard U-Boot uses "rgmii" */
+&gmac0 {
+	status = "okay";
+	phy-mode = "rgmii";
+	phy-handle = <&emac0_phy0>;
+
+	max-frame-size = <9000>;
+
+	mdio0 {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		compatible = "snps,dwxgmac-mdio";
+		emac0_phy0: ethernet-phy@0 {
+			reg = <1>;
+		};
+	};
+};
+
+#if !defined(CONFIG_SOCFPGA_SECURE_VAB_AUTH)
+&fdt_0_blob {
+	filename = "arch/arm/dts/socfpga_agilex5_de25_std.dtb";
+};
+
+&binman {
+	/delete-node/ kernel;
+};
+#endif

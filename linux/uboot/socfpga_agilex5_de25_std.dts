@@ -1,0 +1,147 @@
+// SPDX-License-Identifier:     GPL-2.0
+/*
+ * Terasic DE25-Standard (Agilex 5 A5ED013BB32AE4SCS), for this repo's
+ * de25_soc HPS pin mux: EMAC0, SD/MMC, UART1, I2C1, QSPI. No USB0, SPIM0,
+ * HPS_LED or HPS_KEY in the pin mux.
+ *
+ * Derived from upstream socfpga_agilex5_de25_nano.dts (u-boot-socfpga
+ * socfpga_v2026.04) and Terasic's socfpga_agilex5_de25s.dts
+ * (terasic/u-boot-socfpga de25-standard-v2025.01). Copied into the U-Boot
+ * tree by linux/build_de25_linux.sh.
+ */
+#include "socfpga_agilex5.dtsi"
+
+/ {
+	model = "SoCFPGA Agilex5 Terasic DE25-Standard";
+
+	aliases {
+		serial0 = &uart1;
+		ethernet0 = &gmac0;
+	};
+
+	memory {
+		device_type = "memory";
+		/* We expect the bootloader to fill in the reg */
+		reg = <0 0 0 0>;
+	};
+
+	soc {
+		clocks {
+			osc1 {
+				clock-frequency = <25000000>;
+			};
+		};
+	};
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&i2c1 {
+	status = "okay";
+};
+
+&mmc {
+	status = "okay";
+	sdhci-caps-mask = <0x00002007 0x0000ff00>;
+};
+
+&sd_emmc_power {
+	bootph-all;
+};
+
+/* 3.3 V-only card slot: no 1.8 V switch GPIO on this board */
+&sd_io_1v8_reg {
+	status = "disabled";
+};
+
+&uart1 {
+	status = "okay";
+	bootph-all;
+};
+
+&watchdog0 {
+	status = "okay";
+};
+
+&watchdog1 {
+	status = "okay";
+};
+
+&watchdog2 {
+	status = "okay";
+};
+
+&watchdog3 {
+	status = "okay";
+};
+
+&watchdog4 {
+	status = "okay";
+};
+
+&timer0 {
+	status = "okay";
+};
+
+&timer1 {
+	status = "okay";
+};
+
+&timer2 {
+	status = "okay";
+};
+
+&timer3 {
+	status = "okay";
+};
+
+&qspi {
+	flash0: flash@0 {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "mt25qu02g";
+		reg = <0>;
+		spi-max-frequency = <100000000>;
+
+		m25p,fast-read;
+		cdns,page-size = <256>;
+		cdns,block-size = <16>;
+		cdns,read-delay = <1>;
+		cdns,tshsl-ns = <50>;
+		cdns,tsd2d-ns = <50>;
+		cdns,tchsh-ns = <4>;
+		cdns,tslch-ns = <4>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			qspi_boot: partition@0 {
+				label = "Boot and fpga data";
+				reg = <0x0 0x01000000>;
+			};
+		};
+	};
+};
+
+&nand {
+	status = "disabled";
+
+	flash1: flash@0 {
+		reg = <0>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 {
+			label = "u-boot";
+			reg = <0 0x200000>;
+		};
+		partition@200000 {
+			label = "root";
+			reg = <0x200000 0x3fe00000>;
+		};
+	};
+};

@@ -18,6 +18,8 @@
 --   addr 10: fan tach0/rpm - bits 7:0 raw Tach0Count, bits 23:8 rpm  (RO)
 --   addr 11: fan link status - bits 7:0 Config readback, bit 8
 --            init_done, bit 9 i2c_error                        (RO)
+--   addr 18: board variant 0x53544400 ("STD\0"; the DE25-Nano reads 0)  (RO)
+--   addr 19: build id, Unix time of the build (build_id_pkg.vhd)  (RO)
 --
 -- LEDR[8:0] follow addr-5 bits 8..0; LEDR[9] is a ~1 Hz heartbeat so the
 -- board shows life without a terminal attached.
@@ -124,6 +126,10 @@ architecture rtl of register_block is
     signal bus_from_axi : fpga_interconnect_record := init_fpga_interconnect;
     signal bus_from_top_axi : fpga_interconnect_record := init_fpga_interconnect;
 
+    -- register 18: "STD\0", so tools can refuse a core or release for the
+    -- other board (the DE25-Nano reads 0 there)
+    constant c_board_variant : std_logic_vector(31 downto 0) := x"53544400";
+
     signal loopback_register : std_logic_vector(31 downto 0) := (others => '0');
     signal read_counter      : std_logic_vector(31 downto 0) := (others => '0');
     signal led_register      : std_logic_vector(31 downto 0) := (others => '0');
@@ -224,6 +230,8 @@ begin
                 x"00" & fan_rpm & fan_tach0);
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 11,
                 (31 downto 10 => '0') & fan_i2c_error & fan_init_done & fan_config_readback);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 18, c_board_variant);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 19, work.build_id_pkg.build_id);
 
             uptime_counter <= uptime_counter + 1;
 

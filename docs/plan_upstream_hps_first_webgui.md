@@ -1,8 +1,8 @@
 # Plan: DE25-Standard to upstream boot, HPS-first, network updates, web GUI
 
-Status 2026-10-17: Phase 0b (cleanup, out-of-tree FPGA build, fabric UART
-removed) done on branch `upstream-hps-first`; the rest is plan only. The
-Linux build moves into `build/` with its Phase A rewrite. §2 describes the
+Status 2026-10-18: Phase 0b done; Phase A built end to end without the
+board (A1-A7, see "Phase A progress"), A8 (hardware bring-up) not started.
+Branch `upstream-hps-first`. §2 describes the
 repository *before* Phase 0b; paths elsewhere are the new ones (`fpga/`,
 `tools/`, `build/`). The reference implementation is the sister repository
 `~/dev/de25_nano_testproject` (DE25-Nano, same Agilex 5 family), referred
@@ -277,6 +277,51 @@ build of `953f138`. After `./build.sh fpga`, `git status --ignored` shows
 only `build/`, `.claude/` and `linux/build_output/`.
 
 ### Phase A - upstream boot stack, Alpine, FPGA-first
+
+**Phase A progress (2026-10-18): A1-A7 built, nothing tested on the
+board.** `./build.sh fpga linux jic sdcard` produce
+`build/fpga/output_files/de25_soc.sof`, `build/linux/out/*`,
+`build/images/de25_std.jic` and `build/images/sdcard.img.gz`. Checklist
+tests 1 (`HPS_A76_CORE_SELECTION_DUAL`) and 2 (build reruns cleanly) pass.
+Differences from the steps below, and findings:
+
+- **A3, the SD PHY.** Terasic's working U-Boot programs the SD PHY through
+  its own `cdns,combophy` driver (`drivers/phy/cadence/phy-cadence-combophy.c`
+  in `de25-standard-v2025.01`); upstream has no such driver and
+  `sdhci-cadence6.c` writes five PHY and four HRS registers per speed mode
+  from `cdns,phy-*-sd-ds/-hs` and `cdns,ctrl-*-sd-ds/-hs`. Computed from
+  Terasic's DT fields, their registers are: DQS timing `0x00780000`,
+  gate/loopback `0x81a40040`, DLL master `0x00a000fe`, **DLL slave `0`**,
+  DQ timing `0x28000001`, HRS09 `0x1800c`, HRS10 `0x30000`, HRS16 `0`,
+  HRS07 `0xa0000`. Upstream's DE25-Nano DT puts `0x00a000fe` in the DLL
+  *slave* register (read DQS delay 254, write DQS delay 160 in DLL bypass
+  mode) and leaves the master at the driver default - the likely reason
+  the Nano's DT timed out on every SD command here. `linux/uboot/*-u-boot.dtsi`
+  sets Terasic's values for both DS and HS. Fallbacks (1)-(3) of A3 stay.
+  One difference left: Terasic ORs the DQS-timing bits into the register's
+  reset value, upstream writes the value as is.
+- **A2** includes B3's `CONFIG_PREBOOT` already: it skips on an FPGA-first
+  board (`FPGA_CONFIG` = 3), and the card written in A8 is then ready for
+  Phase B (B6: card first). No `CONFIG_SOCFPGA_RSU_MULTIBOOT` (the Nano's
+  RSU work, Phase F).
+- **A5** uses the Nano's plain layout (boot info, P1, UBOOT, CORE), not its
+  newer RSU layout (Phase F). The FPGA-first P1 is 0x200000-0x2B0FFF
+  (~0.7 MB; the bitstream of this small design is small), U-Boot at
+  0xA00000-0xAE8D97.
+- **A6** leaves out the web GUI install (Phase C) and
+  `setup_alpine_rootfs.sh` (repartitions a card in a reader, with a
+  hard-coded `/dev/sde` default on the Nano; `make_sdcard_image.sh` + `dd`
+  or `sd_recover.py` does the same). Includes `eth-watchdog` and the clean
+  shutdown order from §5.14/§5.14b.
+- **A7, never the wrong board.** `push_to_board.default_console()` matches
+  only `TERASIC_DE25-Standard` (if03) or CP2105 by-id names and never a
+  `DE25-Nano` one; with nothing found the tools stop and list the ports
+  (`--serial` or `DE25_STD_CONSOLE` then). With only the Nano attached, a
+  fallback to the Nano's port would have let `sd_recover.py` rewrite the
+  Nano's card. `sd_recover.py` also reads the running U-Boot's DT model
+  (`fdt print / model`) and writes nothing unless it says DE25-Standard.
+- **A1** timing: met; the tightest is CLOCK0_50 hold at 0.000 ns.
+- `192.168.1.223` is still unconfirmed as free (§7).
 
 Goal: power-on -> SPL -> ATF 2.14.1 -> U-Boot 2026.04 -> Linux 6.18.20 ->
 Alpine, all from upstream sources plus this repo's DTs, FPGA-first, four

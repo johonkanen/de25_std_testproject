@@ -30,8 +30,9 @@ Everything is built out of tree into `build/` (`BUILD_DIR=` moves it):
 ```
 git submodule update --init
 ./build.sh fpga        # -> build/fpga/output_files/de25_soc.sof
-./build.sh linux       # ATF + U-Boot + kernel (still in linux/build_output/ until Phase A)
-./build.sh jic         # -> build/images/de25_soc.jic
+./build.sh linux       # ATF + U-Boot + kernel -> build/linux/out/
+./build.sh jic         # -> build/images/de25_std.jic
+./build.sh sdcard      # Alpine SD card image -> build/images/sdcard.img.gz
 ./build.sh all
 ```
 
@@ -69,6 +70,8 @@ Over LWH2F at `0x2000_0000`, register *n* at byte offset *n* × `0x10`
 | 9 | fan target, MAX6650 KTACH (R/W) |
 | 10 | fan: bits 7:0 Tach0Count, bits 23:8 rpm (RO) |
 | 11 | fan: bits 7:0 Config readback, bit 8 init_done, bit 9 i2c_error (RO) |
+| 18 | board variant `0x53544400` ("STD\0") (RO) |
+| 19 | build id, Unix time of the build (RO) |
 
 Fan details: [docs/de25_std_fan.md](docs/de25_std_fan.md). Pins:
 [docs/de25_pinout.md](docs/de25_pinout.md).

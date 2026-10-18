@@ -1340,8 +1340,8 @@ proc do_create_hps_subsystem {} {
 	set_component_parameter_value Periph_usb_freq_override {20.0}
 	set_component_parameter_value Periph_usb_src_override {3}
 	set_component_parameter_value Pwr_a55_core0_1_on {1}
-	set_component_parameter_value Pwr_a76_core2_on {0}
-	set_component_parameter_value Pwr_a76_core3_on {0}
+	set_component_parameter_value Pwr_a76_core2_on {1}
+	set_component_parameter_value Pwr_a76_core3_on {1}
 	set_component_parameter_value Pwr_boot_core_sel {0}
 	set_component_parameter_value Pwr_cpu_app_select {0}
 	set_component_parameter_value Pwr_mpu_l3_cache_size {1}
