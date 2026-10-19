@@ -1,7 +1,10 @@
 # Plan: DE25-Standard to upstream boot, HPS-first, network updates, web GUI
 
 Status 2026-10-18: Phase 0b and Phase A done - the upstream stack boots
-Alpine on the board (A8 results under "Phase A progress"). Next: Phase B.
+Alpine on the board (A8 results under "Phase A progress"). Phase B built
+(B1, B1b, B4; B2/B3 were done in A), B6 steps 1-2 done - **stopped before
+the first HPS-first power-on**; continue with B6 step 3 ("Phase B
+progress").
 Branch `upstream-hps-first`. §2 describes the
 repository *before* Phase 0b; paths elsewhere are the new ones (`fpga/`,
 `tools/`, `build/`). The reference implementation is the sister repository
@@ -645,6 +648,25 @@ shows `Stratix10 SOC FPGA Manager registered` and `FPGA Region probed`;
 `fpga-reload` prints `overlay applied, FPGA manager operating, ~2 s` and
 `board id 0xde25`, twice in a row, Linux keeps running; with the card
 core deleted, the next power-on prints `core from QSPI`.
+
+**Phase B progress (2026-10-18, uncommitted at the stop):**
+- B1: `HPS FIRST` is the default, `FPGA_FIRST=1` the fallback (tcl,
+  build.sh, READMEs). B1b: `Rst_sdm_wd_config` 2 in the tcl and the `.ip`;
+  the generated sopcinfo shows 2. Fit 619 ALMs, timing met (CLOCK0_50 hold
+  slack 0.008). P1 0x200000-0x262FFF; CORE 0xC00000-0xCF7FFF; core 1011712
+  bytes, build id 1792354926.
+- B4: `linux/tools/fpga_reload/{core_reload.dts,fpga-reload}` (Nano's,
+  plus the register-18 variant check); the SD image installs the core,
+  its `.json`, the `.dtbo` and `/usr/sbin/fpga-reload`.
+- B6 step 1: card written with `sd_recover.py` (booted on the FPGA-first
+  flash, preboot skipped, `fpga0` + FPGA Region probed). Clean `poweroff`
+  seen (`re-mounted ... ro`, `reboot: Power down`).
+- B6 step 2: HPS-first `.jic` programmed, verify OK.
+- **Next:** power-cycle (step 3) with a console logger; expect `core from
+  SD`, `md.l 0x10d120dc 1` = 3 (only after the preboot; do not read LWH2F
+  at a stopped prompt before `bridge enable`); then `fpga-reload` twice,
+  then the card core moved aside -> `core from QSPI`; B1b's open question
+  (watchdog expiry with the plain layout) with someone at the switch.
 
 Note for the Standard: between power-on and the core load the fabric I/O
 is tri-stated, so the MAX6650 runs at its power-up default (loud) for a

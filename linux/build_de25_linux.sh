@@ -122,7 +122,7 @@ pushd "${SRC}/u-boot-altera" >/dev/null
     # Linux is a SIGBUS. `bridge enable` refuses when the fabric is not
     # configured.
     scripts/config --set-str CONFIG_BOOTCOMMAND "bridge enable; run distro_bootcmd"
-    # HPS-first images (HPS_FIRST=1 ./build.sh fpga): the SDM leaves the
+    # HPS-first images (./build.sh fpga, the default): the SDM leaves the
     # FPGA core unconfigured; load it before anything else. Skipped when the
     # fabric is configured already (FPGA-first image, JTAG .sof, software
     # reboot): sysmgr FPGA_CONFIG (0x10d120dc) reads 3. From the SD card's

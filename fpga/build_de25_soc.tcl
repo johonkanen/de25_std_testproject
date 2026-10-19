@@ -97,15 +97,15 @@ set_global_assignment -name POWER_APPLY_THERMAL_MARGIN ADDITIONAL
 # first QSPI-controller access stalls the bus (seen on the DE25-Nano).
 set_global_assignment -name QSPI_OWNERSHIP HPS
 #
-# HPS_FIRST=1 (environment): "HPS FIRST" - the SDM configures only the HPS
-# I/O, DDR I/O and the SPL; U-Boot's preboot loads the FPGA core
-# (de25_std.core.rbf, from linux/make_jic.sh). Default for now: "AFTER
-# INIT_DONE", the whole FPGA before the HPS starts (plan Phase A; Phase B
-# makes HPS-first the default).
-if {[info exists ::env(HPS_FIRST)] && $::env(HPS_FIRST) == 1} {
-    set_global_assignment -name HPS_INITIALIZATION "HPS FIRST"
-} else {
+# "HPS FIRST" (default): the SDM configures only the HPS I/O, DDR I/O and
+# the SPL; U-Boot's preboot loads the FPGA core (de25_std.core.rbf, from
+# linux/make_jic.sh), and Linux can reload it (fpga-reload).
+# FPGA_FIRST=1 (environment): "AFTER INIT_DONE", the whole FPGA before the
+# HPS starts - the fallback; the same U-Boot boots both.
+if {[info exists ::env(FPGA_FIRST)] && $::env(FPGA_FIRST) == 1} {
     set_global_assignment -name HPS_INITIALIZATION "AFTER INIT_DONE"
+} else {
+    set_global_assignment -name HPS_INITIALIZATION "HPS FIRST"
 }
 
 # ---------------------------------------------------------- fabric HDL

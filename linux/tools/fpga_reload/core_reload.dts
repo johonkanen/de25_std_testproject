@@ -1,0 +1,17 @@
+// Device-tree overlay that (re)loads the FPGA core from a running Linux:
+// applied on /fpga-region, the kernel's fpga-region driver hands
+// /lib/firmware/<firmware-name> to the FPGA manager (Stratix10/Agilex SoC,
+// SDM mailbox). HPS-first images only (plan Phase B).
+// Built by linux/tools/make_sdcard_image.sh with `dtc -@`, installed as
+// /lib/firmware/de25_std_core_reload.dtbo; used by fpga-reload.
+/dts-v1/;
+/plugin/;
+/ {
+	fragment@0 {
+		target-path = "/fpga-region";
+		__overlay__ {
+			firmware-name = "de25_std.core.rbf";
+			config-complete-timeout-us = <30000000>;
+		};
+	};
+};

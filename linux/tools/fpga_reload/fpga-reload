@@ -1,0 +1,67 @@
+#!/bin/sh
+# fpga-reload [CORE.rbf] - reload the FPGA core while Linux keeps running
+# (HPS-first images only - plan Phase B). Adapted from the DE25-Nano's.
+#
+#   fpga-reload                    reload /lib/firmware/de25_std.core.rbf
+#   fpga-reload /tmp/new.core.rbf  install that core first, then load it
+#
+# The core must come from the same build as the first stage in QSPI (same
+# HPS I/O, DDR and Quartus version) - otherwise the SDM refuses it, or the
+# load stalls. Everything under /opt/de25web (the web GUI, and whatever
+# else touches the fabric over LWH2F) is paused during the load: an LWH2F
+# access while the fabric reconfigures can hang the CPU. The fabric comes
+# back in its reset state. The console stays up (HPS UART1 is on HPS pins
+# on the DE25-Standard; on the Nano it goes through the fabric).
+#
+# With the web GUI running (plan Phase C), the load goes through its
+# fpga_access.py (op "reload"): it pauses only the register traffic, checks
+# the build id and writes back the registers the load reset. Without it,
+# every /opt/de25web process is stopped (SIGSTOP) around the load.
+set -eu
+FW=/lib/firmware
+CORE=de25_std.core.rbf
+DTBO=$FW/de25_std_core_reload.dtbo
+OVL=/sys/kernel/config/device-tree/overlays/de25_core
+
+if [ $# -ge 1 ]; then
+    cp "$1" "$FW/$CORE.new" && mv "$FW/$CORE.new" "$FW/$CORE"
+    rm -f "$FW/de25_std.core.json"      # it described the core just replaced
+fi
+[ -f "$FW/$CORE" ] || { echo "fpga-reload: no $FW/$CORE"; exit 1; }
+[ -f "$DTBO" ] || { echo "fpga-reload: no $DTBO"; exit 1; }
+[ -d /sys/class/fpga_manager/fpga0 ] || { echo "fpga-reload: no FPGA manager (kernel needs CONFIG_FPGA_MGR_STRATIX10_SOC=y)"; exit 1; }
+
+ACCESS=/opt/de25web/current/fpga_access.py
+if [ -S /run/de25web/fpga.sock ] && python3 "$ACCESS" --client ping >/dev/null 2>&1; then
+    echo "fpga-reload: through fpga_access.py"
+    exec python3 "$ACCESS" --client reload
+fi
+
+mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
+
+USERS=$(pgrep -f /opt/de25web/ || true)
+[ -n "$USERS" ] && kill -STOP $USERS
+resume() { [ -n "$USERS" ] && kill -CONT $USERS; }
+trap resume EXIT
+
+# a fresh overlay each time: re-applying is what triggers the load
+[ -d "$OVL" ] && rmdir "$OVL"
+mkdir "$OVL"
+t0=$(cut -d' ' -f1 /proc/uptime)
+cat "$DTBO" > "$OVL/dtbo"
+t1=$(cut -d' ' -f1 /proc/uptime)
+status=$(cat "$OVL/status")
+state=$(cat /sys/class/fpga_manager/fpga0/state)
+echo "fpga-reload: overlay $status, FPGA manager $state, $(awk "BEGIN{print $t1-$t0}") s"
+[ "$status" = applied ] && [ "$state" = operating ] || exit 1
+
+# the fabric answers over LWH2F again: register 1 is the board id 0xDE25,
+# register 18 the board variant "STD\0" (the DE25-Nano reads 0)
+python3 -c "
+import mmap, os, struct
+f = os.open('/dev/mem', os.O_RDONLY | os.O_SYNC)
+m = mmap.mmap(f, 4096, mmap.MAP_SHARED, mmap.PROT_READ, offset=0x20000000)
+board, variant = struct.unpack_from('<I', m, 1 * 0x10)[0], struct.unpack_from('<I', m, 18 * 0x10)[0]
+print('fpga-reload: board id %#x, variant %#x' % (board, variant))
+raise SystemExit(0 if (board, variant) == (0xDE25, 0x53544400) else 1)
+"

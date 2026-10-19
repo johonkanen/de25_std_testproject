@@ -32,7 +32,7 @@ in `build/linux/out/`, images (`.jic`, `sdcard.img.gz`) in `build/images/`.
 ## Build
 
 ```
-./build.sh fpga        # FPGA-first .sof (HPS_FIRST=1 for an HPS-first one)
+./build.sh fpga        # HPS-first .sof (FPGA_FIRST=1 for an FPGA-first one)
 ./build.sh linux       # CROSS_TOOLCHAIN=<dir> to use an existing aarch64 toolchain
 ./build.sh jic
 ./build.sh sdcard

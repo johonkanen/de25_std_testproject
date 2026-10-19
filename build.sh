@@ -3,7 +3,7 @@
 #
 #   ./build.sh fpga-project   create or refresh the Quartus project in build/fpga
 #   ./build.sh fpga           ... and compile it -> build/fpga/output_files/de25_soc.sof
-#                             (HPS_FIRST=1: an HPS-first image)
+#                             (HPS-first; FPGA_FIRST=1: an FPGA-first image)
 #   ./build.sh linux          ATF + U-Boot + kernel (linux/build_de25_linux.sh)
 #   ./build.sh jic            QSPI image -> build/images/de25_std.jic
 #   ./build.sh sdcard         SD card image -> build/images/sdcard.img.gz

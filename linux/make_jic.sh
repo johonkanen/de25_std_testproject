@@ -18,7 +18,7 @@
 # rootfs always come from the SD card.
 #
 # The .sof comes from fpga/build_de25_soc.tcl: QSPI_OWNERSHIP HPS, and
-# "AFTER INIT_DONE" unless HPS_FIRST=1 ("HPS FIRST").
+# "HPS FIRST" unless FPGA_FIRST=1 ("AFTER INIT_DONE").
 #
 # Env overrides: BUILD_DIR=, SOF=, SPL=, UBOOT_ITB=, JIC=, CORE_RBF=,
 # QSPI_UBOOT_OFFS=, QSPI_CORE_OFFS= (both must match the U-Boot build).

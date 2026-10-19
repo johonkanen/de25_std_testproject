@@ -37,7 +37,7 @@ STAGE="${IMAGES}/sdimage"
 for f in u-boot.itb Image "${DTB}"; do
     [[ -f "${LOUT}/${f}" ]] || { echo "ERROR: ${LOUT}/${f} missing - ./build.sh linux first"; exit 1; }
 done
-for t in fakeroot mkfs.ext4 sfdisk mformat mcopy mmd gzip; do
+for t in fakeroot mkfs.ext4 sfdisk mformat mcopy mmd gzip dtc; do
     command -v "${t}" >/dev/null || { echo "ERROR: ${t} not found"; exit 1; }
 done
 mkdir -p "${IMAGES}" "$(dirname "${TARBALL}")"
@@ -79,9 +79,14 @@ fakeroot -- bash -euo pipefail -c '
     mkdir -p "$1/root"
     tar xzf "$2" -C "$1/root" --numeric-owner
     "$3/linux/tools/alpine_rootfs_config.sh" "$1/root" "$1/boot"
+    # HPS-first images: the core, its manifest and the reload tool
     if [ -f "$7" ]; then
         install -D -m 644 "$7" "$1/root/lib/firmware/de25_std.core.rbf"
-        echo "   + /lib/firmware/de25_std.core.rbf"
+        [ -f "${7%.rbf}.json" ] && install -m 644 "${7%.rbf}.json" "$1/root/lib/firmware/"
+        dtc -q -@ -I dts -O dtb -o "$1/root/lib/firmware/de25_std_core_reload.dtbo" \
+            "$3/linux/tools/fpga_reload/core_reload.dts"
+        install -D -m 755 "$3/linux/tools/fpga_reload/fpga-reload" "$1/root/usr/sbin/fpga-reload"
+        echo "   + /lib/firmware/de25_std.core.rbf (+ .json), de25_std_core_reload.dtbo, /usr/sbin/fpga-reload"
     fi
     mkfs.ext4 -q -F -L std-root -E offset=$(( $4 * 512 )) -d "$1/root" "$5" "$(( $6 / 2 ))k"
 ' _ "${STAGE}" "${TARBALL}" "${TOP}" "${P2_START}" "${IMG}" "${P2_SECTORS}" "${CORE}"

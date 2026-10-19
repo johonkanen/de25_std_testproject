@@ -1348,7 +1348,10 @@ proc do_create_hps_subsystem {} {
 	set_component_parameter_value Pwr_override_cache_size {0}
 	set_component_parameter_value Rst_h2f_cold_en {0}
 	set_component_parameter_value Rst_hps_warm_en {0}
-	set_component_parameter_value Rst_sdm_wd_config {0}
+	# an HPS watchdog timeout makes the SDM load the next RSU image (0 cold
+	# reset, 1 warm reset, 2 trigger remote update) - set before the first
+	# core with a manifest, as it changes the periphery hash (plan B1b, F5)
+	set_component_parameter_value Rst_sdm_wd_config {2}
 	set_component_parameter_value Rst_watchdog_en {0}
 	set_component_parameter_value SDMMC_Mode {4-bit}
 	set_component_parameter_value SDMMC_PinMuxing {IO}

@@ -4104,7 +4104,7 @@ Altera and sold by Altera or its authorized distributors.-->
         <ipxact:parameter parameterId="Rst_sdm_wd_config" type="int">
           <ipxact:name>Rst_sdm_wd_config</ipxact:name>
           <ipxact:displayName>Watchdog SDM Configuration</ipxact:displayName>
-          <ipxact:value>0</ipxact:value>
+          <ipxact:value>2</ipxact:value>
         </ipxact:parameter>
         <ipxact:parameter parameterId="NAND_PinMuxing" type="string">
           <ipxact:name>NAND_PinMuxing</ipxact:name>
