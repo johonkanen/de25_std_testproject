@@ -2,7 +2,7 @@
 """
 deploy_web.py - update the DE25-Standard's web GUI over the network.
 
-Packs linux/webapp/ (the three .py, VERSION, static/) into a release, uploads
+Packs linux/webapp/ (the three .py, VERSION, BOARD, static/) into a release, uploads
 it (POST /api/update with its SHA-256 and the token), waits for the board's
 server to restart into it, checks it (the version, the register file
 answering with the board id), and confirms it. Anything short of that and
@@ -29,7 +29,7 @@ import urllib.error
 import urllib.request
 
 WEBAPP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webapp")
-FILES = ("fpga_web.py", "fpga_access.py", "temp_control.py", "VERSION", "static")
+FILES = ("fpga_web.py", "fpga_access.py", "temp_control.py", "VERSION", "BOARD", "static")
 
 
 def git_describe():
@@ -107,6 +107,12 @@ def main():
     if status != 200:
         sys.exit(f"{base}: /api/version answered {status}: {before}")
     print(f">> board runs {before.get('release')} (previous {before.get('previous')})")
+    # two boards on one LAN: check this is the board the release is for
+    # (releases before Phase D only report it in /api/board)
+    want = open(os.path.join(WEBAPP, "BOARD")).read().strip()
+    there = before.get("board") or request(base + "/api/board")[1].get("board")
+    if there != want:
+        sys.exit(f"{base} is {there!r}, this release is for {want!r} - wrong --host?")
 
     headers = {"X-Sha256": sha, "Content-Type": "application/gzip"}
     if token:

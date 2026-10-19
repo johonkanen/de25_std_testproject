@@ -146,9 +146,11 @@ its own: the lease is the only net when the loop dies.
 | `temp_control.py` | the temperature loop: hwmon, PI, `control.sock`, `control.json` |
 | `static/` | `index.html`, `app.js`, `style.css`, `board.svg` (the DE25-Standard, after the user manual's board photo) |
 | `VERSION` | the GUI's version; releases add the git state (`1.0.0+a1b5e2b`) |
+| `BOARD` | `de25-std`: the board a release is for. `/api/update` refuses a release for another board (a DE25-Nano release has no `BOARD`), and `deploy_web.py` checks the board before it uploads |
 | `../board/de25web-supervisor.sh` | runs the three processes on the board and reverts a bad release - installed once, never part of a release |
 | `../tools/install_webapp.py` | one-time install on a running board, over the serial console |
 | `../tools/deploy_web.py` | an update over HTTP: pack, upload, wait, check, confirm |
+| `../tools/supervisor_test.py` | the release cases (good, two updates, no confirmation, crash, restart during the test, rollback onto a broken one, wrong board) against the real supervisor under busybox `sh` with `--sim` |
 | `../tools/gui_test.py` | drives the page in headless Chromium: every blinker, an LED click, the HEX card, the loop, the fan slider, `--reload-core`, screenshots |
 
 ## Install (once)
@@ -204,8 +206,15 @@ Sockets and pid files are in `/run/de25web/`.
    the release's processes exit 3 times (together), or when the board
    restarts during the test.
 
+An upload while another release is still on test leaves `previous` at the
+last confirmed release, so a failed test never lands on a release nobody
+confirmed.
+
 **Roll back** puts the previous release on test the same way, so rolling
 back onto a broken release reverts too.
+
+`python3 linux/tools/supervisor_test.py` runs these cases against the real
+supervisor on the host (busybox `sh`, `--sim`, a layout in `/tmp/d25s`).
 
 ## API
 
@@ -220,8 +229,8 @@ back onto a broken release reverts too.
 | `POST /api/hex` | `{"value": 0x123456}` digits, or `{"raw": [6 bytes, HEX0 first]}` (segments g..a, 1 = lit); and/or `{"blank": 0..63}` (bit n: HEXn); and/or `{"flip": true}` (readable from the other side of the board) |
 | `POST /api/fan` | `{"rpm": 1500..6000}` - loop in auto/manual: it becomes manual at this speed; loop off: register 9 directly |
 | `GET /api/read?reg=N`, `POST /api/write` | raw register access |
-| `GET /api/version` | release running, previous, on test |
-| `POST /api/update` | body: release `.tar.gz`; headers `X-Sha256`, `X-Token` |
+| `GET /api/version` | release running, previous, on test, `board` |
+| `POST /api/update` | body: release `.tar.gz`; headers `X-Sha256`, `X-Token`; 400 unless its `BOARD` is `de25-std` |
 | `POST /api/update/confirm`, `/api/update/rollback` | |
 | `GET /api/fpga` | the FPGA core: `running_build_id` (register 19), `installed` and `previous` manifests, `last_load` |
 | `POST /api/fpga` | body: core bundle `.tar.gz`; headers `X-Sha256`, `X-Token`, `X-Force: 1` (no installed manifest). 200 loaded, 409 refused before anything was touched, 500 failed to load (`rolled_back` says whether the previous core is back) |

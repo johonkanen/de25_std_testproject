@@ -869,6 +869,25 @@ updates within the test time, no confirmation, a release that crashes, a
 restart during the test, rollback onto a broken release. **[HW]** Then
 one good update and one deliberately broken release on the board.
 
+**Phase D progress (2026-10-19):**
+- `linux/webapp/BOARD` (`de25-std`) in every release; `/api/update`
+  refuses (400) a release whose `BOARD` is another board's or missing (a
+  DE25-Nano release has none); `/api/version` reports `board`;
+  `deploy_web.py` checks it before uploading (falling back to
+  `/api/board` for older releases).
+- **Fixed**: an upload while another release was still on test made that
+  unconfirmed release `previous`, so a failed test reverted to a release
+  nobody had confirmed, and it then stayed. `previous` now stays the last
+  confirmed release; pruning keeps it.
+- `linux/tools/supervisor_test.py`: the cases above against the real
+  supervisor under busybox `sh` with `--sim` (good, two updates, two
+  unconfirmed, no confirmation, crash, restart during the test, rollback
+  onto a broken release, wrong board): all pass, ~2 min.
+- On the board: `deploy_web.py` update confirmed; a release whose server
+  exits at once was reverted after 3 exits (11 s after its start, the
+  first release back answering after 17 s); a `de25-nano` release refused
+  with 400. Loop and fan unaffected.
+
 ### Phase E - FPGA core updates over the network
 
 Reference: `nano:docs/hps_first.md` "A new core over the network", commit

@@ -26,7 +26,7 @@ Usage:
 
 Layout on the board (installed by linux/tools/install_webapp.py; see
 linux/webapp/README.md):
-    /opt/de25web/releases/<name>/   one GUI release (the three .py, static/, VERSION)
+    /opt/de25web/releases/<name>/   one GUI release (the three .py, static/, VERSION, BOARD)
     /opt/de25web/current            -> the release running
     /opt/de25web/previous           -> the one before (rollback target)
     /opt/de25web/pending            exists while a new release is on test
@@ -47,7 +47,8 @@ API:
     POST /api/fan       {"rpm": 1500..6000}  loop in auto/manual: becomes manual at this speed
     GET  /api/read?reg=N, POST /api/write {"reg": N, "value": V}   raw access
     GET  /api/version               GUI release, previous, whether on test
-    POST /api/update                body: a release .tar.gz; headers X-Sha256, X-Token
+    POST /api/update                body: a release .tar.gz; headers X-Sha256, X-Token;
+                                    refused unless its BOARD file names this board
     POST /api/update/confirm        keep the release on test (only when all three answer)
     POST /api/update/rollback       back to the previous release (X-Token)
     GET  /api/fpga                  the FPGA core: running build id, installed, previous
@@ -335,7 +336,7 @@ class Releases:
     is supervisor.sh, outside any release: it reverts a release still
     pending after its test time, or one that keeps crashing."""
 
-    REQUIRED = ("VERSION", "fpga_web.py", "fpga_access.py", "temp_control.py", "static/index.html")
+    REQUIRED = ("VERSION", "BOARD", "fpga_web.py", "fpga_access.py", "temp_control.py", "static/index.html")
 
     def __init__(self, base):
         self.base = base
@@ -346,7 +347,7 @@ class Releases:
         return os.path.basename(os.readlink(p)) if os.path.islink(p) else None
 
     def info(self, running_version):
-        out = {"version": running_version, "managed": self.enabled}
+        out = {"version": running_version, "board": BOARD_NAME, "managed": self.enabled}
         if self.enabled:
             pending = os.path.join(self.base, "pending")
             out.update({
@@ -376,6 +377,11 @@ class Releases:
             missing = [f for f in self.REQUIRED if f not in names]
             if missing:
                 raise ValueError("not a GUI release, missing %s" % ", ".join(missing))
+            # two boards on one LAN: a DE25-Nano release (no BOARD file, or
+            # another name) must not land here
+            board_name = tar.extractfile("BOARD").read().decode().strip()
+            if board_name != BOARD_NAME:
+                raise ValueError("this release is for %r, this board is %r" % (board_name, BOARD_NAME))
             version = tar.extractfile("VERSION").read().decode().strip()
             if not version or "/" in version or version.startswith("."):
                 raise ValueError("bad VERSION %r" % version)
@@ -394,14 +400,17 @@ class Releases:
                         f.write(tar.extractfile(m).read())
         shutil.rmtree(dest, ignore_errors=True)
         os.rename(tmp, dest)
-        # switch: previous <- current, current <- new, pending marks the test
+        # switch: previous <- current, current <- new, pending marks the test.
+        # A current still on test was never confirmed: previous stays the
+        # last confirmed release, the one a failed test should go back to
         cur = self._link("current")
-        if cur and cur != rel:
+        on_test = os.path.exists(os.path.join(self.base, "pending"))
+        if cur and cur != rel and not on_test:
             self._symlink("previous", cur)
         self._symlink("current", rel)
         with open(os.path.join(self.base, "pending"), "w") as f:
             f.write(rel + "\n")
-        self._prune(keep={rel, cur})
+        self._prune(keep={rel, cur, self._link("previous")})
         return rel
 
     def confirm(self, running_release):
