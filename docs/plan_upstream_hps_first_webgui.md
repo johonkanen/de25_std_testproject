@@ -1008,6 +1008,29 @@ has no manifest).
     two pointer bytes, so `--verify` fails against a `.jic`-written slot
     (passes after `--add`; both boot); after a slot switch the console is
     silent until the preboot has loaded the core (HPS-first).
+- **Phase F progress (2026-10-19):** F1-F6 built (`c52c00b`): RSU layout
+  by default for HPS-first (FPGA-first's ~3 MB bitstream does not fit a
+  1 MB slot, RSU=0 there), `de25_std_app.rpd` 0.8 MB, bundle 2 MB.
+  - Card written with `sd_recover.py` on the plain flash: boots as before
+    (no SPT: the preboot uses the plain names). First boot found two
+    image faults, fixed in `124d736`: eth0 stalled after the warm reboot
+    and `rc.local`'s `ntpd`/`apk add python3` ran before `eth-watchdog`
+    could bounce it (no python3 -> no GUI -> `rsu-confirm` would have let
+    the watchdog fire: stopped with TERM at 47 s); and a new random MAC per
+    image left the LAN's ARP caches on the old one. Now: network work in
+    the background after the gateway answers, gratuitous ARP, MAC kept in
+    `~/.de25_std_mac`. The stratix10-rsu sysfs files are absent on a plain
+    flash (present with RSU).
+  - RSU `.jic` programmed (verify OK), power cycle: `rsu_spl_mmc_filename,
+    filename: u-boot_P1.itb`, `core de25_std_P1.core.rbf from SD`,
+    `rsu-confirm: image 0x00400000 healthy after 13 s - confirmed`;
+    `rsu_client --count` 6, P1 0x400000 priority 1; `/lib/firmware/
+    de25_std.core.rbf -> rsu/P1/...`; `/api/rsu` slot P1, confirmed, no
+    failures; `gui_test.py --reload-core` passes with the FPGA image card.
+    The SPL banner prints twice ("Bloblist at 72000 not found" between).
+  - Next: `deploy_rsu.py` end to end, the F7 refusals, the watchdog
+    fallback (kill rsu-confirm - also closes B1b) and a power cut after
+    the P1 erase (someone at the switch).
 - **Partial reconfiguration** of the blinkers:
   `nano:docs/partial_reconfiguration_plan.md` (written for the Nano; the
   same structure applies with 10 LEDs).

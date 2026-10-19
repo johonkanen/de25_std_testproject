@@ -351,14 +351,6 @@ try:
         p1 = page.js('document.getElementById("rsu-p1").textContent')
         check(shown in ("P1", "factory image") and pill in ("confirmed", "fallback image", "on test"),
               f"FPGA image card: running {shown!r}, {pill!r}, P1 holds {p1!r} (board: {rsu.get('confirm')!r})")
-    rsu = api("/api/rsu")
-    if rsu.get("rsu"):
-        shown = wait_for(lambda: (lambda t: t if t and t != "-" else None)(
-            page.js('document.getElementById("rsu-image").textContent')))
-        pill = page.js('document.getElementById("rsu-confirm").textContent')
-        p1 = page.js('document.getElementById("rsu-p1").textContent')
-        check(shown in ("P1", "factory image") and pill in ("confirmed", "fallback image", "on test"),
-              f"FPGA image card: running {shown!r}, {pill!r}, P1 holds {p1!r} (board: {rsu.get('confirm')!r})")
 
     if SHOTS:
         time.sleep(2)
