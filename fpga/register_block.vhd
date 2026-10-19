@@ -17,8 +17,11 @@
 --   addr 8 : free-running core-clock uptime counter  (read only)
 --   addr 9 : fan target, MAX6650 KTACH register  (read / write)
 --   addr 10: fan tach0/rpm - bits 7:0 raw Tach0Count, bits 23:8 rpm  (RO)
---   addr 11: fan link status - bits 7:0 Config readback, bit 8
---            init_done, bit 9 i2c_error                        (RO)
+--   addr 11: fan link status - bits 7:0 Config (last read, ~1 s), bit 8
+--            init_done, bit 9 i2c_error, bit 10 Config = 0x29 (closed
+--            loop), bits 15:12 times Config was found wrong and the chip
+--            set up again (saturates at 15), bits 23:16 Alarm Status,
+--            bits 31:24 GPIO Status (last read)                (RO)
 --   addr 13: LED blinker mode, low 3 bits (read / write) - 0 software,
 --            1 off, 2 counter, 3 scanner, 4 breathing, 5 sparkle
 --   addr 14: LEDR 3..0 brightness, a byte each (RO)
@@ -205,6 +208,10 @@ architecture rtl of register_block is
     signal fan_config_readback : std_logic_vector(7 downto 0);
     signal fan_init_done       : std_logic;
     signal fan_i2c_error       : std_logic;
+    signal fan_config_ok       : std_logic;
+    signal fan_alarm_status    : std_logic_vector(7 downto 0);
+    signal fan_gpio_status     : std_logic_vector(7 downto 0);
+    signal fan_reconfig_count  : std_logic_vector(3 downto 0);
 
     signal i2c_sda_low : std_logic;
     signal i2c_scl_low : std_logic;
@@ -309,7 +316,8 @@ begin
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 10,
                 x"00" & fan_rpm & fan_tach0);
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 11,
-                (31 downto 10 => '0') & fan_i2c_error & fan_init_done & fan_config_readback);
+                fan_gpio_status & fan_alarm_status & fan_reconfig_count & '0' & fan_config_ok
+                & fan_i2c_error & fan_init_done & fan_config_readback);
             connect_data_to_address(bus_from_axi, bus_from_top_axi, 13, blinker_mode_register);
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 14, blinker_levels(31 downto 0));
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 15, blinker_levels(63 downto 32));
@@ -422,6 +430,10 @@ begin
         ,rpm_out         => fan_rpm
         ,tach0_out       => fan_tach0
         ,config_readback => fan_config_readback
+        ,config_ok       => fan_config_ok
+        ,alarm_status    => fan_alarm_status
+        ,gpio_status     => fan_gpio_status
+        ,reconfig_count  => fan_reconfig_count
         ,ktach_out       => open
         ,init_done       => fan_init_done
         ,i2c_error       => fan_i2c_error

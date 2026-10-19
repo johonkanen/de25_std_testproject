@@ -60,7 +60,8 @@ import sys
 import threading
 import time
 
-from fpga_access import (FAN_MAX_RPM, FAN_MIN_RPM, REG_FAN_KTACH, REG_FAN_TACH, SAFE_FAN_RPM,
+from fpga_access import (FAN_MAX_RPM, FAN_MIN_RPM, REG_FAN_KTACH, REG_FAN_STATUS, REG_FAN_TACH,
+                         SAFE_FAN_RPM, fan_status,
                          FpgaClient, FpgaUnavailable, hwmon_root, ktach_to_rpm, rpm_to_ktach,
                          run_dir)
 
@@ -182,6 +183,7 @@ class Controller:
         self.errors = collections.deque(maxlen=max(1, int(SETTLE_S / period)))
         self.n = 0
         self.sensor_fails = 0
+        self.fan_closed_loop = None
         self.need_reset = True             # bumpless start from the register's target
         self.target_rpm = None
         self.hwdir = None
@@ -312,6 +314,7 @@ class Controller:
         try:
             reg_target = round(ktach_to_rpm(self.fpga.read(REG_FAN_KTACH)))
             rpm = self.fpga.read(REG_FAN_TACH) >> 8 & 0xFFFF
+            fan = fan_status(self.fpga.read(REG_FAN_STATUS))
         except FpgaUnavailable as e:
             st.update(fpga_ok=False, fpga_error=str(e), target_rpm=self.target_rpm, rpm=None,
                       p=round(self.pi.p, 2), i=round(self.pi.i, 2),
@@ -357,6 +360,20 @@ class Controller:
             except FpgaUnavailable as e:
                 st.update(fpga_ok=False, fpga_error=str(e))
                 status = str(e)
+        # the MAX6650 out of closed loop (plan §5.17b): the target means
+        # nothing, whatever the loop computes - say so, once in the log
+        st["fan_closed_loop"] = fan["closed_loop"]
+        if fan["closed_loop"] is False:
+            status = (f"the fan controller is not regulating (MAX6650 Config "
+                      f"{fan['config_readback']:#04x}, not {0x29:#04x}): the fan ignores its target - "
+                      f"power-cycle the board if it stays")
+        if fan["closed_loop"] is not self.fan_closed_loop:
+            if fan["closed_loop"] is False:
+                log(f"MAX6650 not in closed loop: Config {fan['config_readback']:#04x}, alarms "
+                    f"{fan['alarm_status']:#04x}, GPIO {fan['gpio_status']:#04x}, fan {rpm} rpm")
+            elif self.fan_closed_loop is False:
+                log(f"MAX6650 in closed loop again (set up {fan['reconfigs']} times)")
+            self.fan_closed_loop = fan["closed_loop"]
         self.target_rpm = reg_target
         st.update(target_rpm=reg_target, rpm=rpm, p=round(self.pi.p, 2), i=round(self.pi.i, 2),
                   status=status)

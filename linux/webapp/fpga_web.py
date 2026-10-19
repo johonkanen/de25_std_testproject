@@ -78,7 +78,7 @@ import time
 HERE = os.path.dirname(os.path.realpath(__file__))   # through the "current" link
 sys.path.insert(0, HERE)
 
-from fpga_access import (BOARD_ID, BOARD_NAME, BOARD_VARIANT, FAN_MAX_RPM,  # noqa: E402
+from fpga_access import (BOARD_ID, BOARD_NAME, BOARD_VARIANT, FAN_MAX_RPM, fan_status,  # noqa: E402
                          FAN_MIN_RPM, FEATURE_HEX, HEX_FLIP, HEX_RAW_MODE, FEATURE_HW_BLINKERS, KEY_RESET_BIT, LEDS,
                          REG_BLINKER, REG_BLINKER_ID, REG_BUILD_ID, REG_FAN_KTACH,
                          REG_FAN_STATUS, REG_FAN_TACH, REG_FEATURES, REG_GIT, REG_HEX_CONTROL,
@@ -293,9 +293,7 @@ class Board:
                 "target_rpm": round(ktach_to_rpm(r[REG_FAN_KTACH])),
                 "rpm": (r[REG_FAN_TACH] >> 8) & 0xFFFF,
                 "tach0": r[REG_FAN_TACH] & 0xFF,
-                "config_readback": fan & 0xFF,
-                "init_done": bool(fan >> 8 & 1),
-                "i2c_error": bool(fan >> 9 & 1),
+                **fan_status(fan),
             },
         }
 

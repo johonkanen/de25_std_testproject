@@ -242,3 +242,4 @@ button:focus-visible, input:focus-visible, .part:focus-visible { outline: 2px so
 .board .lcd-bezel { fill: #2a2c30; stroke: #000; }
 .board .lcd-screen { fill: #9eae8c; }
 .board .jack { stroke: #222; }
+#fan-ok.bad { color: var(--bad); font-weight: 600; }

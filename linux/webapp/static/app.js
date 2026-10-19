@@ -214,7 +214,12 @@ function renderPanels(s) {
     $("fan-target-val").textContent = s.fan.target_rpm;
   }
   $("fan-rpm").textContent = s.fan.rpm;
-  $("fan-ok").textContent = s.fan.i2c_error ? "I2C error" : s.fan.init_done ? "ok" : "starting";
+  // closed_loop false: the MAX6650 does not regulate (plan §5.17b)
+  const f = s.fan, stuck = f.closed_loop === false;
+  $("fan-ok").textContent = f.i2c_error ? "I2C error" : !f.init_done ? "starting"
+    : stuck ? `not regulating (Config 0x${f.config_readback.toString(16).padStart(2, "0")}) - the fan ignores its target; power-cycle the board if it stays`
+    : f.reconfigs ? `ok (set up again ${f.reconfigs}${f.reconfigs === 15 ? "+" : ""} times)` : "ok";
+  $("fan-ok").classList.toggle("bad", f.i2c_error || stuck);
   $("git").textContent = s.git_hash;
   if (s.build_id !== undefined) $("core-build").textContent = buildName(s.build_id);
   $("uptime").textContent = formatUptime(s.linux_uptime_s);
@@ -634,6 +639,7 @@ function renderControl(c) {
   $("ctl-rpm").textContent = c.rpm == null ? "-" : "measured " + c.rpm + " rpm";
   // the pill: a word, not color alone
   if (!c.fpga_ok) setPill("ctl-status", "bad", "FPGA access unavailable");
+  else if (c.fan_closed_loop === false) setPill("ctl-status", "bad", "fan controller not regulating");
   else if (c.mode === "off") setPill("ctl-status", "wait", "off");
   else if (c.mode === "manual") setPill("ctl-status", "wait", "manual");
   else if (!c.sensor_ok) setPill("ctl-status", "bad", "no temperature");

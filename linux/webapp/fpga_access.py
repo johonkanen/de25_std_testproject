@@ -28,7 +28,8 @@ Protocol: <run>/fpga.sock, one JSON object per line each way.
     {"op": "rsu"}                               remote system update: images, status, confirmation
     {"op": "install_rsu", "bundle": PATH, "reboot": true}
                                                 write an RSU bundle to P1, then reboot into it
-    {"op": "sim", "ambient": 15.0, "load": 1.0} the simulated plant (--sim only)
+    {"op": "sim", "ambient": 15.0, "load": 1.0} the simulated plant (--sim only);
+                                                "fan_stuck": 1 the MAX6650 out of closed loop
 Errors: {"ok": false, "error": "..."}; while paused every read/write answers
 {"ok": false, "error": "paused: <reason>", "paused": true}, and so does every
 read/write while the fabric is not configured (below).
@@ -154,6 +155,26 @@ def ktach_to_rpm(ktach):
     return KTACH_RPM / ((int(ktach) & 0xFF) + 1)
 
 
+# Register 11 (max6650_fan_control.vhd): bits 7:0 the MAX6650's Config as
+# last read, bit 8 setup done, bit 9 I2C error, bit 10 Config as written,
+# 15:12 times the fabric found Config wrong and set the chip up again,
+# 23:16 Alarm Status, 31:24 GPIO Status (the last three: cores from Phase E
+# on; older ones read 0 there).
+FAN_CONFIG_CLOSED_LOOP = 0x29
+
+
+def fan_status(value):
+    """register 11, decoded. closed_loop is None until the setup has run:
+    False means the MAX6650 does not regulate - it stuck in full-on once
+    (plan §5.17b), the fan then ignores its target"""
+    init_done = bool(value >> 8 & 1)
+    return {"config_readback": value & 0xFF, "init_done": init_done,
+            "i2c_error": bool(value >> 9 & 1),
+            "closed_loop": (value & 0xFF) == FAN_CONFIG_CLOSED_LOOP if init_done else None,
+            "reconfigs": value >> 12 & 0xF, "alarm_status": value >> 16 & 0xFF,
+            "gpio_status": value >> 24 & 0xFF}
+
+
 RESET_VALUES = {REG_LOOPBACK: 0, REG_LEDS: 0, REG_FAN_KTACH: rpm_to_ktach(FAN_MIN_RPM),
                 REG_BLINKER: 0, REG_HEX_VALUE: 0, REG_HEX_CONTROL: 0, REG_HEX_RAW0: 0,
                 REG_HEX_RAW1: 0}
@@ -268,7 +289,7 @@ class SimBridge:
     def __init__(self, state_file=None):
         self._regs = {REG_ID: BOARD_ID, REG_GIT: 0x5151D00D, REG_VARIANT: BOARD_VARIANT,
                       REG_FEATURES: FEATURE_HW_BLINKERS | FEATURE_HEX,
-                      REG_FAN_STATUS: 0x129, REG_BUILD_ID: 0, **RESET_VALUES}
+                      REG_FAN_STATUS: 0x1F000529, REG_BUILD_ID: 0, **RESET_VALUES}
         self._state_file = state_file
         if state_file:
             try:
@@ -284,6 +305,13 @@ class SimBridge:
         self._rpm = self.rpm_for(self._regs[REG_FAN_KTACH])
         self._rpm_t = self._t0
         self._lock = threading.Lock()
+        self.fan_stuck = False
+
+    def set_fan_stuck(self, stuck):
+        """the MAX6650 stuck in full-on (plan §5.17b): Config 0x09, full speed"""
+        with self._lock:
+            self.fan_stuck = bool(stuck)
+            self._regs[REG_FAN_STATUS] = 0x1F000109 if stuck else 0x1F000529
 
     @classmethod
     def rpm_for(cls, ktach):
@@ -296,7 +324,7 @@ class SimBridge:
         with self._lock:
             now = time.monotonic()
             dt, self._rpm_t = now - self._rpm_t, now
-            target = self.rpm_for(self._regs.get(REG_FAN_KTACH, 255))
+            target = self.FAN_TOP_RPM if self.fan_stuck else self.rpm_for(self._regs.get(REG_FAN_KTACH, 255))
             self._rpm += (target - self._rpm) * (1 - math.exp(-dt / 1.5))
             return self._rpm
 
@@ -910,6 +938,8 @@ class Access:
                 self.sim.plant.load = float(req["load"])
             if "temp" in req:
                 self.sim.plant.temp = float(req["temp"])
+            if "fan_stuck" in req:
+                self.bridge.set_fan_stuck(req["fan_stuck"])
             log(f"sim plant: ambient {self.sim.plant.ambient} C, load {self.sim.plant.load}")
             return {"ok": True, "ambient": self.sim.plant.ambient, "load": self.sim.plant.load}
         if op == "release":

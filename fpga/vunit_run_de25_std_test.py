@@ -65,6 +65,7 @@ for f in [
     FPGA / "de25_soc_top.vhd",
     FPGA / "sim/led_blinkers_tb.vhd",
     FPGA / "sim/hex_display_tb.vhd",
+    FPGA / "sim/max6650_fan_control_tb.vhd",
 ]:
     lib.add_source_files(f)
 

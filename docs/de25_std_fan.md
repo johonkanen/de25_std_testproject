@@ -44,14 +44,44 @@ here):
 | reg | value | why |
 |----:|-------|-----|
 | `0x16` Count   | `0x01` | 0.5 s tach sample window |
-| `0x02` Config  | `0x0A` | intermediate value while AlarmEnable and the final Config are still being written |
 | `0x08` AlarmEn | `0x0F` | GPIO1 / tach-overflow / min-output / max-output alarms |
-| `0x02` Config  | `0x29` | final: closed-loop operation, KSCALE = 2 |
 | `0x04` GPIODef | `0xF5` | GPIO1 = FULL-ON input, GPIO0 = ALERT output |
-| `0x00` Speed   | ktach  | the target - written last, and again whenever it changes |
+| `0x02` Config  | `0x29` | closed-loop operation, 12 V, KSCALE = 2 - last |
+| `0x00` Speed   | ktach  | the target - after the Config readback, and again whenever it changes |
 
 All values taken verbatim from Terasic's `BOARD_MANAGEMENT.v`, not
-derived.
+derived. Terasic also writes Config `0x0A` (software full-on) before
+AlarmEn; that step is left out (2026-10-19): every FPGA core load re-runs
+the setup while the chip stays powered, and `0x0A` sent the fan to full
+speed for a few seconds each time.
+
+Before the setup (and every retry) the bus is cleared: nine SCL pulses
+with SDA released and a STOP, for a chip left mid-byte by a core load.
+
+## Status, and the stuck full-on state
+
+Once (after ~105 back-to-back core loads) the MAX6650 stuck in full-on:
+Config read back `0x09` where `0x29` was written, each new setup was
+acknowledged and still read `0x09`, and only a power cycle cleared it
+(plan §5.17b). So the driver now also reads, about once a second, Config,
+Alarm Status (`0x10`, which clears latched alarms) and GPIO Status
+(`0x14`), and sets the chip up again whenever Config is not `0x29`.
+Register 11:
+
+| bits | |
+|------|---|
+| 7:0   | Config, last read |
+| 8     | setup done |
+| 9     | an I2C write went unacknowledged |
+| 10    | Config = `0x29` (closed loop) |
+| 15:12 | times Config was found wrong and the chip set up again (saturates at 15) |
+| 23:16 | Alarm Status, last read |
+| 31:24 | GPIO Status, last read |
+
+The web GUI and `temp_control.py` say "not regulating" when Config is
+not `0x29` (that works with older cores too, from bits 7:0).
+`fpga/sim/max6650_fan_control_tb.vhd` covers the recovery, the setup
+order, the status reads and the stuck case against a behavioural MAX6650.
 
 ## Choosing a target
 

@@ -23,18 +23,30 @@
 -- ADT7461 temperature sensor, which BOARD_MANAGEMENT.v shares the same
 -- state machine with but is out of scope here):
 --   0x16 Count    = 0x01  0.5 s tach sample window
---   0x02 Config   = 0x0A  intermediate value while ALARM_ENABLE and the
---                         final Config are still being written, so the
---                         chip is never left running under a half-applied
---                         configuration
 --   0x08 AlarmEn  = 0x0F  GPIO1/tach-overflow/min-output/max-output alarms
---   0x02 Config   = 0x29  final: closed-loop operation, KSCALE = 2
 --   0x04 GPIODef  = 0xF5  GPIO1 = FULL-ON input, GPIO0 = ALERT output
---   0x00 Speed    = ktach_in  the target - written last, and again
---                         whenever ktach_in changes
+--   0x02 Config   = 0x29  closed-loop operation, KSCALE = 2 - last
+--   0x00 Speed    = ktach_in  the target - after the Config readback, and
+--                         again whenever ktach_in changes
+-- Terasic writes Config 0x0A (software full-on) before AlarmEn and 0x29
+-- after it. Here that step is left out: every FPGA core load re-runs this
+-- setup (the chip stays powered), and 0x0A sent the fan to full speed for
+-- a few seconds each time (plan, Phase E). The chip keeps its previous
+-- closed-loop configuration until Config is written.
 --
--- Then it polls Tach0Count (0x0C) forever, gap g_poll_cycles apart, for
--- rpm_out - and re-writes Speed whenever ktach_in changes.
+-- Before the first setup, and before every retry, the bus is cleared: a
+-- core load can stop the fabric half-way through a transfer, and a MAX6650
+-- left mid-byte may hold SDA low. Nine SCL pulses with SDA released (a
+-- read with NACK, no START) and a STOP get it back to idle.
+--
+-- Then it polls Tach0Count (0x0C), gap g_poll_cycles apart, for rpm_out,
+-- and re-writes Speed whenever ktach_in changes. Every g_status_polls
+-- polls it also reads Config, Alarm Status (0x10 - which clears latched
+-- alarms) and GPIO Status (0x14) into config_readback, alarm_status and
+-- gpio_status; if Config is not the 0x29 written, it sets the chip up
+-- again (reconfig_count counts those). Once the MAX6650 stuck in full-on
+-- (Config 0x09) after a run of core loads, and only a power cycle cleared
+-- it (plan §5.17b) - this both retries and shows it.
 --
 -- Choosing a target: KTACH = ((992 * KSCALE) / (RPM / 60)) - 1, straight
 -- from auto_fan.v's own formula (KSCALE = 2 throughout this module,
@@ -54,11 +66,9 @@
 -- register so rpm_out tops out at 60 * 255 = 15300, comfortably above
 -- this board's fan range.
 --
--- config_readback is Config (0x02) read back once right after the last
--- configuration write completes - not part of the ongoing poll, just a
--- one-shot "the I2C link is alive and the write landed" check, since the
--- MAX6650 (unlike the AMC6821) has no separate device-ID register to poll
--- for the same purpose.
+-- config_readback is Config (0x02): read right after the setup, then with
+-- every status read. config_ok says it is the value written (the MAX6650,
+-- unlike the AMC6821, has no device-ID register to check the link with).
 ------------------------------------------------------------------------
 --
 -- A write the MAX6650 does not acknowledge aborts the transaction with a
@@ -86,6 +96,9 @@ entity max6650_fan_control is
         ;g_kscale     : natural := 2
         -- gap between poll cycles
         ;g_poll_cycles : natural := 5_000_000                         -- 100 ms
+        -- a status read (Config, Alarm Status, GPIO Status) every this many
+        -- polls (~1 s)
+        ;g_status_polls : natural := 10
         -- settling time before the first config, and the back-off after an
         -- I2C error (~100 ms at 50 MHz)
         ;g_por_cycles  : natural := 5_000_000
@@ -98,7 +111,11 @@ entity max6650_fan_control is
         -- measurements
         ;rpm_out         : out std_logic_vector(15 downto 0)   -- 60 * tach0
         ;tach0_out       : out std_logic_vector(7 downto 0)    -- raw Tach0Count
-        ;config_readback : out std_logic_vector(7 downto 0)    -- Config, read once post-init
+        ;config_readback : out std_logic_vector(7 downto 0)    -- Config, last read
+        ;config_ok       : out std_logic                       -- Config reads back as written
+        ;alarm_status    : out std_logic_vector(7 downto 0)    -- Alarm Status (0x10), last read
+        ;gpio_status     : out std_logic_vector(7 downto 0)    -- GPIO Status (0x14), last read
+        ;reconfig_count  : out std_logic_vector(3 downto 0)    -- Config found wrong (saturates)
         ;ktach_out       : out std_logic_vector(7 downto 0)    -- KTACH last programmed
         ;init_done       : out std_logic                       -- config sequence sent
         ;i2c_error       : out std_logic                       -- a write went unacknowledged
@@ -124,6 +141,11 @@ architecture rtl of max6650_fan_control is
     constant c_reg_alarmen : std_logic_vector(7 downto 0) := x"08";
     constant c_reg_tach0   : std_logic_vector(7 downto 0) := x"0C";
     constant c_reg_count   : std_logic_vector(7 downto 0) := x"16";
+    constant c_reg_alarm   : std_logic_vector(7 downto 0) := x"10";
+    constant c_reg_gpiostat : std_logic_vector(7 downto 0) := x"14";
+
+    -- Config: closed loop (bits 5:4 = 10), 12 V fan, KSCALE = 2
+    constant c_config_value : std_logic_vector(7 downto 0) := x"29";
 
     -- KTACH register value for g_min_rpm, per auto_fan.v's own formula:
     --   ktach = ((992 * kscale) / (rpm / 60)) - 1
@@ -144,10 +166,9 @@ architecture rtl of max6650_fan_control is
 
     constant c_config : t_reg_write_array := (
          (c_reg_count,   x"01")
-        ,(c_reg_config,  x"0A")
         ,(c_reg_alarmen, x"0F")
-        ,(c_reg_config,  x"29")
         ,(c_reg_gpiodef, x"F5")
+        ,(c_reg_config,  c_config_value)
     );
 
     ------------------------------------------------------------------
@@ -156,8 +177,10 @@ architecture rtl of max6650_fan_control is
 
     ------------------------------------------------------------------
     -- top-level sequencer
-    type t_state is (st_por_wait, st_config, st_verify_config,
-                     st_write_speed, st_poll, st_poll_wait, st_error_wait);
+    type t_state is (st_por_wait, st_recover, st_config, st_verify_config,
+                     st_write_speed, st_poll, st_poll_wait,
+                     st_status_config, st_status_alarm, st_status_gpio,
+                     st_error_wait);
 
     signal state : t_state := st_por_wait;
 
@@ -165,6 +188,9 @@ architecture rtl of max6650_fan_control is
 
     signal cfg_index : natural range 0 to c_config'high := 0;
     signal delay     : natural range 0 to c_delay_max   := 0;
+    signal polls     : natural range 0 to g_status_polls := 0;
+    signal reconfigs : unsigned(3 downto 0) := (others => '0');
+    signal cfg_ok    : std_logic := '0';
 
     -- the KTACH value currently programmed into the chip, and the target
     signal ktach_target  : std_logic_vector(7 downto 0) := (others => '0');
@@ -174,7 +200,9 @@ architecture rtl of max6650_fan_control is
     -- one I2C transaction: a register write or a register read
     --   write_reg : START, addr+W, reg, data, STOP
     --   read_reg  : START, addr+W, reg, START, addr+R, read+NACK, STOP
-    type t_xact is (xact_idle, xact_write_reg, xact_read_reg);
+    --   recover   : read+NACK with no START (nine SCL pulses, SDA
+    --               released), STOP - clears a slave left mid-byte
+    type t_xact is (xact_idle, xact_write_reg, xact_read_reg, xact_recover);
 
     -- driven by the sequencer
     signal xact       : t_xact := xact_idle;
@@ -209,6 +237,8 @@ begin
     addr_read  <= g_slave_addr & '1';
 
     ktach_out <= ktach_written;
+    config_ok      <= cfg_ok;
+    reconfig_count <= std_logic_vector(reconfigs);
 
     -- rpm_out = 60 * tach0_out, a plain multiply - see header
     rpm_out <= std_logic_vector(resize(unsigned(tach0_out) * 60, 16));
@@ -325,6 +355,17 @@ begin
                                 xact_step <= xact_step + 1;
                             end if;
 
+                        when xact_recover =>
+                            if xact_step = 0 then
+                                op_v      := i2c_op_read;
+                                xact_step <= 1;
+                            else
+                                op_v      := i2c_op_stop;
+                                xact_busy <= '0';
+                                xact_done <= '1';
+                                xact_step <= 0;
+                            end if;
+
                         when others =>
                             i2c_req   <= '0';
                             xact_busy <= '0';
@@ -382,6 +423,19 @@ begin
             xact_start <= '1';
         end procedure start_read;
 
+        procedure start_recover is
+        begin
+            xact       <= xact_recover;
+            xact_start <= '1';
+        end procedure start_recover;
+
+        procedure start_setup is
+        begin
+            cfg_index <= 0;
+            state     <= st_config;
+            start_write(c_config(0).reg, c_config(0).data);
+        end procedure start_setup;
+
     begin
         if rising_edge(clock) then
 
@@ -393,12 +447,17 @@ begin
                 -- let the MAX6650 finish its own power-on sequence
                 when st_por_wait =>
                     if delay = g_por_cycles then
-                        delay     <= 0;
-                        cfg_index <= 0;
-                        state     <= st_config;
-                        start_write(c_config(0).reg, c_config(0).data);
+                        delay <= 0;
+                        state <= st_recover;
+                        start_recover;
                     else
                         delay <= delay + 1;
+                    end if;
+
+                -- the bus is idle again (see header): set the chip up
+                when st_recover =>
+                    if xact_done = '1' then
+                        start_setup;
                     end if;
 
                 -- walk the configuration script
@@ -418,9 +477,10 @@ begin
                         end if;
                     end if;
 
-                -- one-shot readback of Config right after the last
-                -- configuration write - confirms the link works (see
-                -- header). Not repeated afterwards.
+                -- Config read back right after the setup. A wrong value
+                -- does not stop the fan loop: Speed is written and the tach
+                -- polled as usual, and the next status read sets the chip up
+                -- again (see header).
                 when st_verify_config =>
                     if xact_done = '1' then
                         if xact_err = '1' then
@@ -429,7 +489,13 @@ begin
                             state     <= st_error_wait;
                         else
                             config_readback <= xact_rdata;
+                            if xact_rdata = c_config_value then
+                                cfg_ok <= '1';
+                            else
+                                cfg_ok <= '0';
+                            end if;
                             init_done       <= '1';
+                            polls           <= 0;
                             state           <= st_write_speed;
                             start_write(c_reg_speed, ktach_target);
                         end if;
@@ -471,20 +537,79 @@ begin
                         start_write(c_reg_speed, ktach_target);
                     elsif delay = g_poll_cycles then
                         delay <= 0;
-                        state <= st_poll;
-                        start_read(c_reg_tach0);
+                        if polls = g_status_polls - 1 then
+                            polls <= 0;
+                            state <= st_status_config;
+                            start_read(c_reg_config);
+                        else
+                            polls <= polls + 1;
+                            state <= st_poll;
+                            start_read(c_reg_tach0);
+                        end if;
                     else
                         delay <= delay + 1;
                     end if;
 
-                -- back off, then reconfigure from scratch.
+                -- the status read: Config, Alarm Status, GPIO Status
+                when st_status_config =>
+                    if xact_done = '1' then
+                        if xact_err = '1' then
+                            i2c_error <= '1';
+                            delay     <= 0;
+                            state     <= st_error_wait;
+                        else
+                            config_readback <= xact_rdata;
+                            if xact_rdata = c_config_value then
+                                cfg_ok <= '1';
+                            else
+                                cfg_ok <= '0';
+                            end if;
+                            state <= st_status_alarm;
+                            start_read(c_reg_alarm);
+                        end if;
+                    end if;
+
+                when st_status_alarm =>
+                    if xact_done = '1' then
+                        if xact_err = '1' then
+                            i2c_error <= '1';
+                            delay     <= 0;
+                            state     <= st_error_wait;
+                        else
+                            alarm_status <= xact_rdata;
+                            state        <= st_status_gpio;
+                            start_read(c_reg_gpiostat);
+                        end if;
+                    end if;
+
+                -- Config not as written: set the chip up again
+                when st_status_gpio =>
+                    if xact_done = '1' then
+                        if xact_err = '1' then
+                            i2c_error <= '1';
+                            delay     <= 0;
+                            state     <= st_error_wait;
+                        else
+                            gpio_status <= xact_rdata;
+                            if cfg_ok = '0' then
+                                if reconfigs /= "1111" then
+                                    reconfigs <= reconfigs + 1;
+                                end if;
+                                start_setup;
+                            else
+                                state <= st_poll;
+                                start_read(c_reg_tach0);
+                            end if;
+                        end if;
+                    end if;
+
+                -- back off, clear the bus, then set the chip up from scratch
                 when st_error_wait =>
                     if delay = g_por_cycles then
                         delay     <= 0;
                         init_done <= '0';
-                        cfg_index <= 0;
-                        state     <= st_config;
-                        start_write(c_config(0).reg, c_config(0).data);
+                        state     <= st_recover;
+                        start_recover;
                     else
                         delay <= delay + 1;
                     end if;
@@ -494,7 +619,12 @@ begin
             if reset = '1' then
                 state           <= st_por_wait;
                 delay           <= 0;
+                polls           <= 0;
                 cfg_index       <= 0;
+                cfg_ok          <= '0';
+                reconfigs       <= (others => '0');
+                alarm_status    <= (others => '0');
+                gpio_status     <= (others => '0');
                 xact            <= xact_idle;
                 xact_start      <= '0';
                 init_done       <= '0';

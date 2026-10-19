@@ -1198,8 +1198,12 @@ Seen once (Phase E, after ~105 back-to-back core reloads): Config read
 back 0x09 (mode 00 = software full-on) where 0x29 was written; every later
 fabric setup was acknowledged and still read 0x09; only a power cycle
 (the chip stays powered across fabric reloads) cleared it. Safe (the fan
-at full speed), but the loop has no control then. The GUI warns when
-`config_readback` is not 0x29.
+at full speed), but the loop has no control then. Since then: the GUI and
+`temp_control.py` warn when Config is not 0x29; the fabric clears the bus
+before each setup, reads Config/Alarm Status/GPIO Status about once a
+second and sets the chip up again when Config is wrong (register 11, see
+`docs/de25_std_fan.md`); Terasic's Config 0x0A step is gone, so a reload
+no longer sends the fan to full speed.
 
 ### 5.18 CPU_RESET_n resets the LWH2F bridge side (Standard)
 `axi_bridge_reset <= system_reset`, and `system_reset` follows the
