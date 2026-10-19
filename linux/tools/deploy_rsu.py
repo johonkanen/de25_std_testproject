@@ -24,6 +24,7 @@ image (its own U-Boot and core), from where a good bundle goes in again.
 import argparse
 import glob
 import hashlib
+import http.client
 import json
 import os
 import sys
@@ -41,7 +42,7 @@ def status(base):
     try:
         s1, rsu = request(base + "/api/rsu", timeout=10)
         s2, fpga = request(base + "/api/fpga", timeout=10)
-    except OSError:
+    except (OSError, http.client.HTTPException):   # a reboot cuts a reply short
         return None, None
     if s1 != 200 or s2 != 200:
         return None, None

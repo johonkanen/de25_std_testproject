@@ -21,14 +21,16 @@ import hashlib
 import io
 import json
 import os
+import select
 import subprocess
 import sys
 import tarfile
 import time
-import urllib.error
-import urllib.request
+import http.client
+import urllib.parse
 
 WEBAPP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webapp")
+EARLY_ANSWER_S = 1.0     # request(): how long a POST waits for an answer before its body
 FILES = ("fpga_web.py", "fpga_access.py", "temp_control.py", "VERSION", "BOARD", "static")
 
 
@@ -66,17 +68,27 @@ def pack_release(webapp=WEBAPP):
 
 
 def request(url, data=None, headers=None, timeout=10):
-    req = urllib.request.Request(url, data=data, headers=headers or {},
-                                 method="POST" if data is not None else "GET")
+    """(status, JSON reply). A POST's headers go first, then a short wait: the
+    board answers a refusal it can make from them (token, size) at once and
+    closes without reading the body - sending the body then would end in a
+    broken pipe instead of that answer."""
+    u = urllib.parse.urlsplit(url)
+    c = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, json.loads(r.read() or b"{}")
-    except urllib.error.HTTPError as e:
-        body = e.read()
-        try:
-            return e.code, json.loads(body)
-        except ValueError:
-            return e.code, {"error": body.decode(errors="replace")}
+        c.putrequest("POST" if data is not None else "GET", u.path + ("?" + u.query if u.query else ""))
+        for k, v in dict(headers or {}, **({"Content-Length": str(len(data))} if data is not None else {})).items():
+            c.putheader(k, v)
+        c.endheaders()
+        if data and not select.select([c.sock], [], [], EARLY_ANSWER_S)[0]:
+            c.sock.sendall(data)
+        r = c.getresponse()
+        body = r.read()
+    finally:
+        c.close()
+    try:
+        return r.status, json.loads(body or b"{}")
+    except ValueError:
+        return r.status, {"error": body.decode(errors="replace")}
 
 
 def main():
@@ -130,7 +142,7 @@ def main():
         time.sleep(1)
         try:
             status, now = request(base + "/api/version", timeout=3)
-        except (OSError, urllib.error.URLError):
+        except (OSError, http.client.HTTPException):
             continue
         if status == 200 and now.get("release") == rel:
             break

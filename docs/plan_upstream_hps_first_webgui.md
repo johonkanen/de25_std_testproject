@@ -1028,9 +1028,24 @@ has no manifest).
     de25_std.core.rbf -> rsu/P1/...`; `/api/rsu` slot P1, confirmed, no
     failures; `gui_test.py --reload-core` passes with the FPGA image card.
     The SPL banner prints twice ("Bloblist at 72000 not found" between).
-  - Next: `deploy_rsu.py` end to end, the F7 refusals, the watchdog
-    fallback (kill rsu-confirm - also closes B1b) and a power cut after
-    the P1 erase (someone at the switch).
+  - `deploy_rsu.py` end to end (bundle 1792432492 over the same build):
+    written in 16.0 s (erase P1, SSBL.P1, CORE.P1, card, /lib/firmware,
+    write + verify P1), reboot, SPL `u-boot_P1.itb`, `core
+    de25_std_P1.core.rbf from SD`, link up at 5 s, `rsu-confirm` confirmed
+    at 12 s; the tool saw it 61 s after the upload. `/api/rsu` now shows
+    "P1 holds build 1792432492" (the `.jic`-written P1 had no rsu.json).
+  - F7 refusals, `linux/tools/rsu_refusal_test.py`: 13/13 refused before
+    any erase, board unchanged after each (no/wrong token 403, wrong SHA
+    and over 32 MiB 400; random bytes, cut archive, core bundle, nano
+    board, wrong kind, truncated/corrupt/missing part, app.rpd over P1's
+    1 MB with a matching manifest 409). It found a client fault: the board
+    answers a header refusal (token, size) at once and closes without
+    reading the body, and urllib - still sending - got a broken pipe
+    instead of the 403. `deploy_web.request` (used by deploy_web/fpga/rsu)
+    now sends the headers, waits 1 s for an early answer, then the body;
+    all three print the 403 with a wrong token.
+  - Next: the watchdog fallback (kill rsu-confirm - also closes B1b) and a
+    power cut after the P1 erase (someone at the switch).
 - **Partial reconfiguration** of the blinkers:
   `nano:docs/partial_reconfiguration_plan.md` (written for the Nano; the
   same structure applies with 10 LEDs).
