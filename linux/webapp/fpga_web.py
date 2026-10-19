@@ -464,6 +464,7 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
     from urllib.parse import urlparse, parse_qs
 
     static_dir = os.path.join(HERE, "static")
+    hex_lock = threading.Lock()     # /api/hex read-modify-writes register 22
 
     def restart_soon():
         # the supervisor starts whatever "current" points at
@@ -607,6 +608,16 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
             given; raw mode on with "raw", off with "value" """
             if not set(req) <= {"value", "raw", "blank", "flip"} or not req:
                 raise ValueError('give "value", "raw", "blank" and/or "flip"')
+            with hex_lock:          # two requests at once must not undo each other
+                self._hex_write(req)
+            lit = board.read(REG_HEX_LIT0) | (board.read(REG_HEX_LIT1) & 0xFFFF) << 32
+            ctrl = board.read(REG_HEX_CONTROL)
+            self._json({"value": "%06x" % (board.read(REG_HEX_VALUE) & 0xFFFFFF),
+                        "raw_mode": bool(ctrl & HEX_RAW_MODE), "flip": bool(ctrl & HEX_FLIP),
+                        "blank": ctrl >> 8 & 0x3F,
+                        "lit": [(lit >> (8 * n)) & 0x7F for n in range(6)]})
+
+        def _hex_write(self, req):
             ctrl = board.read(REG_HEX_CONTROL)
             if "value" in req:
                 board.write(REG_HEX_VALUE, parse_value(req["value"]) & 0xFFFFFF)
@@ -626,11 +637,6 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
             if "flip" in req:
                 ctrl = ctrl | HEX_FLIP if req["flip"] else ctrl & ~HEX_FLIP
             board.write(REG_HEX_CONTROL, ctrl)
-            lit = board.read(REG_HEX_LIT0) | (board.read(REG_HEX_LIT1) & 0xFFFF) << 32
-            self._json({"value": "%06x" % (board.read(REG_HEX_VALUE) & 0xFFFFFF),
-                        "raw_mode": bool(ctrl & HEX_RAW_MODE), "flip": bool(ctrl & HEX_FLIP),
-                        "blank": ctrl >> 8 & 0x3F,
-                        "lit": [(lit >> (8 * n)) & 0x7F for n in range(6)]})
 
         def _fan(self, rpm):
             # The temperature loop owns the fan unless it is off: a speed from

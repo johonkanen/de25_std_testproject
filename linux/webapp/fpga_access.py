@@ -162,6 +162,11 @@ RESET_VALUES = {REG_LOOPBACK: 0, REG_LEDS: 0, REG_FAN_KTACH: rpm_to_ktach(FAN_MI
 RSTMGR_BRGMODRST = 0x10D1102C
 BRGMODRST_LWH2F = 1 << 1
 GUARD_RECHECK_S = 3.0
+# after a core load the fabric's own power-on reset (register_block.vhd,
+# g_por_cycles, ~100 ms) still holds the HPS side of the LWH2F bridge in
+# reset: an access then stalls the CPU for good (hung the board, 2026-10-19,
+# reading register 1 at once). BRGMODRST does not show it - wait it out.
+POST_LOAD_SETTLE_S = 0.5
 
 # HEX displays: segments g..a of each hex digit, 1 = lit (hex_display.vhd);
 # register 22: bit 0 raw mode, bit 1 flip (read from the other side)
@@ -997,6 +1002,7 @@ class Access:
         try:
             self.loader.load()
             secs = time.monotonic() - t0
+            time.sleep(POST_LOAD_SETTLE_S)
             if not self.fabric_ready(recheck=True):
                 raise CoreError("the LWH2F bridge is still in reset after the load")
             board_id = self.bridge.read(REG_ID)

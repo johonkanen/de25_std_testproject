@@ -390,6 +390,7 @@ class Controller:
         last = time.monotonic()
         next_t = last
         prev_status = None
+        logged_t = 0.0
         while True:
             next_t += self.period
             now = time.monotonic()
@@ -400,9 +401,13 @@ class Controller:
                 log(f"sample failed: {e!r}")
                 raise
             status = st["status"].split(" - ")[0].split(":")[0]
-            if status != prev_status:
+            # at the fan's floor the loop flips between "regulating" and
+            # "saturated" every sample (KTACH rounding): log those at most
+            # every 30 s - the log is on the SD card; anything else at once
+            routine = {status, prev_status} <= {"regulating", "saturated"}
+            if status != prev_status and (not routine or time.monotonic() - logged_t >= 30):
                 log(f"{st['status']} (T {st.get('measured')} C, target {st.get('target_rpm')} rpm)")
-                prev_status = status
+                prev_status, logged_t = status, time.monotonic()
             time.sleep(max(0.0, next_t - time.monotonic()))
             if next_t < time.monotonic() - 5 * self.period:
                 next_t = time.monotonic()           # fell far behind: do not catch up

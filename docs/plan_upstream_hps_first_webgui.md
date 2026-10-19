@@ -787,6 +787,48 @@ switches/keys live, fan rpm tracks the target, loop settles at 42 °C or
 reports "saturated low" honestly in a cool room, `gui_test.py` passes
 against board and `--sim`.
 
+**Phase C progress (2026-10-19):**
+- C1: blinkers with `c_leds` 10 (registers 13-17, 20); `hex_display.vhd`
+  (21 value, 22 control: bit 0 raw, **bit 1 flip** - the six digits read
+  from the other side of the board, HEXn -> HEX(5-n), each digit turned
+  180 degrees -, bits 13:8 blank; 23/24 raw; 25/26 lit); HEX pins at 1.2 V
+  from Terasic's `golden_top.qsf`. `CPU_RESET_n` decoupled: `por_reset`
+  (counter only) drives the AXI side and `axi_bridge_reset`, the button
+  resets only the user registers and reads as register 7 bit 4. Features
+  register 16 = 0x3. `./build.sh sim`: `led_blinkers_tb`, `hex_display_tb`
+  pass. 1398 ALMs, timing met. On the board: `123AbC` on the displays (the
+  user reads them from the top edge: hence the flip), the LED sweep.
+- C2-C5: `fpga_access.py`, `temp_control.py`, `fpga_web.py`, `board.svg`,
+  `app.js`/`index.html`/`style.css` ported (details in
+  `linux/webapp/README.md`). `/api/hex` takes value/raw/blank/flip; the
+  HEX card has digit entry, blank buttons, segment clicks and a flip
+  checkbox.
+- C6: `install_webapp.py`, `deploy_web.py`, `gui_test.py`,
+  `de25web-supervisor.sh`; the SD image installs the GUI
+  (`alpine_rootfs_config.sh`: `/opt/de25web`, inittab respawn, token kept
+  from `~/.de25web_token_std`). `gui_test.py` passes against `--sim`
+  (desktop and phone width) and the board.
+- On the board: `install_webapp.py` installed it; `deploy_web.py` updated
+  it over the network (confirmed); `gui_test.py --reload-core` passes
+  (reload 2.3 s, blinker mode and HEX value written back); `fpga-reload`
+  from the console goes through `fpga_access.py` (2.14 s).
+- **Bug found and fixed**: the first `--reload-core` hung the whole board
+  (no ping, no console). The load itself finished; the first register read
+  after it did not. The fabric's power-on reset (`g_por_cycles`, ~100 ms)
+  holds LWH2F after configuration and BRGMODRST does not show it.
+  `fpga_access.py` read register 1 at once; `fpga-reload` only survived
+  because Python's start-up took longer. Both now wait 0.5 s (§5.9). The
+  Nano's code reads straight after a load too.
+- `push_to_board.py`/`install_webapp.py`: busybox `nc -l` never exits after
+  the sender closes unless `-w 5 < /dev/null` (§5.16).
+- `temp_control.py` logs routine regulating <-> saturated changes at most
+  every 30 s (at the 1500 rpm floor the KTACH rounding flipped it every
+  second).
+- Open (C7): fan rpm at KTACH targets 1500/2500/4000/6000 (`config_readback`
+  0x29 already seen); re-fit the plant from a step response (the die sits
+  at 37-40 °C at 1500 rpm in this room, so 42 °C is saturated low); press
+  CPU_RESET (PB9) with Linux running; safe rpm under full load (§5.17).
+
 ### Phase D - GUI updates over the network
 
 Copy unchanged in logic: `nano:linux/board/de25web-supervisor.sh` (three
@@ -986,6 +1028,12 @@ traffic for the **entire** load with no time limit (a 120 s limit expired
 during a hung load and the next read hung the CPU). Clients must not
 resend non-idempotent requests after a read timeout. Without the GUI,
 `fpga-reload` SIGSTOPs every `/opt/de25web` process around the load.
+
+**And for ~100 ms after it** (Standard, 2026-10-19): the fabric's own
+power-on reset (`register_block.vhd`, `g_por_cycles`) holds the LWH2F
+bridge after configuration, invisible in BRGMODRST; a read in that window
+hung the whole board (no ping, no console, power cycle). `fpga_access.py`
+and `fpga-reload` wait 0.5 s (`POST_LOAD_SETTLE_S`) before the first access.
 (The Standard's fabric UART, a second master, was removed in 0b.)
 
 ### 5.10 Do not raw-poke the bridges from Linux
@@ -1057,7 +1105,9 @@ keep NTP for accuracy and `hwclock -w` after it.
   such as `echo X$((1+1))Y` (the echoed command contains `$((1+1))`, only
   the output contains `X2Y`).
 - No scp/ssh: push files with `nc` (board listens, host connects), the
-  listener started over the console.
+  listener started over the console as `nc -l -p PORT -w 5 < /dev/null >
+  FILE`: without `-w` and stdin from `/dev/null` busybox `nc` never exits
+  after the sender closes.
 - The board-side socket timeout is short (5 s): stage large files in
   `/tmp`.
 - Never `pkill -f` a pattern that also matches the command line doing the
@@ -1072,7 +1122,8 @@ temperature under full load (measure in C7).
 
 ### 5.18 CPU_RESET_n resets the LWH2F bridge side (Standard)
 `axi_bridge_reset <= system_reset`, and `system_reset` follows the
-button. Fixed in C1; until then, do not press it while Linux runs.
+button. Fixed in C1 (the bridge side runs from the power-on counter only);
+press it with Linux running once in C7 to confirm.
 
 ### 5.19 WSL2 host
 USB devices must be attached with `usbipd.exe attach --wsl --busid <id>`
@@ -1162,6 +1213,6 @@ need the board.
 | Safe fan rpm under full CPU load (no MAX6650 fail-safe) | C7: `stress`-like load on 4 cores, fan at 1500 vs 4000 rpm, watch the die sensors |
 | Is MAX6650 GPIO1 (configured as FULL-ON input) wired to an over-temperature signal on the board? | schematic `~/dev/de25_std/Schematic/DE25-Standard.pdf` |
 | Does the ethernet RX stall seen on the Nano happen here? | 20 warm reboots + 20 power cycles with the health check logging |
-| Is rstmgr `BRGMODRST` readable from Linux userspace in HPS-first mode (C2 guard)? | `python3` mmap read of `0x10d1102c` on the board (it was readable from Linux on 2026-09-08); if not, use `/sys/class/fpga_manager/fpga0/state` |
-| HEX and blinker additions: do they fit the periphery you want to freeze before Phase E? | decide before the first manifest-carrying `.jic` |
+| Is rstmgr `BRGMODRST` readable from Linux userspace in HPS-first mode (C2 guard)? | **Yes** (Phase B: 0 in Linux; the guard runs in `fpga_access.py` on the board). It does not show the fabric's own ~100 ms bridge reset after a load (§5.9) |
+| HEX and blinker additions: do they fit the periphery you want to freeze before Phase E? | **Done**: the HEX pins went in with C1, before any manifest-carrying `.jic` |
 | With `Rst_sdm_wd_config` 2 (B1b) and the plain layout, does a watchdog timeout just reset or hang the board? | B6: let U-Boot's watchdog expire at its prompt once (`wdt stop` not run, wait 30 s), someone at the power switch |

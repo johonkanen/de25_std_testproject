@@ -13,7 +13,7 @@ Usage:
   --run     chmod +x the remote file and execute it, streaming its output
   --port    TCP port to use for the transfer (default 8080)
 
-The board listens (`nc -l -p PORT > file`, started over the console) and
+The board listens (`nc -l -p PORT ... > file`, started over the console) and
 this host connects: WSL2's NAT lets the host reach a LAN device, not the
 other way round. Adapted from the DE25-Nano's push_to_nano.py.
 """
@@ -83,8 +83,11 @@ def main():
     ser = serial.Serial(console_or_exit(args.serial), args.baud, timeout=0.5)
     drain(ser)  # clear any pending output
 
-    print(f">> starting listener on the board: nc -l -p {args.port} > {args.remote_path}")
-    out = send_and_wait(ser, f"nc -l -p {args.port} > {args.remote_path}", wait=0.5)
+    # busybox nc: -w 5 and stdin from /dev/null, or it never exits after
+    # the sender closes (it keeps waiting on the console for input)
+    listen = f"nc -l -p {args.port} -w 5 < /dev/null > {args.remote_path}"
+    print(f">> starting listener on the board: {listen}")
+    out = send_and_wait(ser, listen, wait=0.5)
     sys.stdout.write(out.decode(errors="replace"))
     time.sleep(1.0)  # let the listener actually bind before we connect
 

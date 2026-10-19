@@ -57,6 +57,10 @@ state=$(cat /sys/class/fpga_manager/fpga0/state)
 echo "fpga-reload: overlay $status, FPGA manager $state, $(awk "BEGIN{print $t1-$t0}") s"
 [ "$status" = applied ] && [ "$state" = operating ] || exit 1
 
+# the fabric's power-on reset holds the LWH2F bridge for ~100 ms after the
+# load (register_block.vhd): an access before then stalls the CPU for good
+sleep 0.5
+
 # the fabric answers over LWH2F again: register 1 is the board id 0xDE25,
 # register 18 the board variant "STD\0" (the DE25-Nano reads 0)
 python3 -c "

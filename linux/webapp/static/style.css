@@ -74,7 +74,7 @@ code, .num { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospa
 .board-wrap { min-width: 0; }
 .board-host svg { width: 100%; height: auto; display: block; }
 .ledbar {
-  display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px;
+  display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px;
   margin-top: 12px; padding: 12px; border-radius: var(--radius);
   background: var(--pcb); border: 1px solid var(--pcb-line);
 }
@@ -112,7 +112,8 @@ code, .num { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospa
 .update button.secondary { background: transparent; color: var(--text); border-color: var(--line); }
 button:focus-visible, input:focus-visible, .part:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.bits { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; }
+.bits { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
+#hex-blank { grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 8px 0; }
 .bits button { padding: 5px 0; font-family: ui-monospace, Menlo, Consolas, monospace; }
 .bits button.on { background: color-mix(in srgb, var(--ok) 25%, transparent); border-color: var(--ok); }
 .bits button:disabled { opacity: 0.45; cursor: default; }
