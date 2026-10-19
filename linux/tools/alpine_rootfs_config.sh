@@ -44,12 +44,16 @@ EOF
 # on the DE25-Nano a run of reboots broke the ext4 journal. TERM, 2 s, KILL,
 # then read-only.
 
-# One fixed, locally administered MAC per card: U-Boot's
-# NET_RANDOM_ETHADDR gives eth0 a new one on every boot, which the LAN's
-# ARP caches and DHCP reservations do not like.
+# One fixed, locally administered MAC: U-Boot's NET_RANDOM_ETHADDR gives
+# eth0 a new one on every boot, which the LAN's ARP caches and DHCP
+# reservations do not like. BOARD_MAC (make_sdcard_image.sh keeps it in a
+# host file) keeps it across re-imaged cards; else a new one.
 mkdir -p "${ROOT}/etc/de25"
-[[ -s "${ROOT}/etc/de25/mac" ]] ||
+if [[ -n "${BOARD_MAC:-}" ]]; then
+    echo "${BOARD_MAC}" > "${ROOT}/etc/de25/mac"
+elif [[ ! -s "${ROOT}/etc/de25/mac" ]]; then
     printf '02:de:25:%02x:%02x:%02x\n' $(od -An -tu1 -N3 /dev/urandom) > "${ROOT}/etc/de25/mac"
+fi
 
 cat > "${ROOT}/etc/rc.local" << EOF
 #!/bin/sh
@@ -66,13 +70,24 @@ hostname de25-std
 # power-off, so set it early; NTP below still corrects it and writes it
 # back (apk needs a sane clock for TLS).
 [ -e /dev/rtc0 ] && hwclock -s -u -f /dev/rtc0
-# a pause for the link to finish training (without it ntpd races and
-# fails on a fair number of boots - DE25-Nano)
-sleep 2
-ntpd -q -n -p pool.ntp.org && [ -e /dev/rtc0 ] && hwclock -w -u -f /dev/rtc0
-# The web GUI (/opt/de25web, started from inittab) needs python3: fetched
-# on the first boot with network, a no-op after that.
-command -v python3 >/dev/null || apk add python3
+# tell the LAN this address has this MAC (a re-imaged card may bring a
+# new one, and caches keep the old for minutes)
+arping -U -c 2 -I eth0 ${BOARD_IP} > /dev/null 2>&1 &
+# NTP and python3 need the network: in the background, so init goes on
+# and starts eth-watchdog, which bounces an eth0 that passes no traffic
+# after a warm reboot (plan §5.14 - seen on this board's first boot of a
+# new card, 2026-10-19: rc.local's ntpd and apk failed, no python3, no
+# GUI). This waits for the gateway first (up to 3 min). The web GUI
+# (/opt/de25web, started from inittab) needs python3: fetched on the first
+# boot with network, a no-op after that.
+(
+    i=0
+    while ! ping -c 1 -W 1 ${BOARD_GW} > /dev/null 2>&1 && [ \$i -lt 180 ]; do
+        i=\$((i + 1)); sleep 1
+    done
+    ntpd -q -n -p pool.ntp.org && [ -e /dev/rtc0 ] && hwclock -w -u -f /dev/rtc0
+    command -v python3 > /dev/null || apk add python3
+) &
 EOF
 chmod +x "${ROOT}/etc/rc.local"
 

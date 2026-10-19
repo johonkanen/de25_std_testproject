@@ -19,7 +19,9 @@
 # Env: BUILD_DIR, IMG_MB (default 768 - the rootfs can be grown on the
 # board later), BOOT_MB (128), BOARD_IP, BOARD_GW, ALPINE_VERSION,
 # DE25WEB_TOKEN_FILE (the web GUI's update token; default
-# ~/.de25web_token_std when it exists - deploy_web.py's - else a new one).
+# ~/.de25web_token_std when it exists - deploy_web.py's - else a new one),
+# DE25_MAC_FILE (eth0's MAC; default ~/.de25_std_mac, written on the first
+# build).
 set -euo pipefail
 
 TOP="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -36,6 +38,10 @@ CORE="${IMAGES}/de25_std.core.rbf"
 IMG="${IMAGES}/sdcard.img"
 TOKEN_FILE="${DE25WEB_TOKEN_FILE:-${HOME}/.de25web_token_std}"
 [[ -s "${TOKEN_FILE}" ]] || TOKEN_FILE=""
+# the board's eth0 MAC, kept across re-imaged cards like the token (a new
+# one each image left the LAN's ARP caches pointing at the old card)
+MAC_FILE="${DE25_MAC_FILE:-${HOME}/.de25_std_mac}"
+BOARD_MAC="$(cat "${MAC_FILE}" 2>/dev/null || true)"
 STAGE="${IMAGES}/sdimage"
 
 for f in u-boot.itb Image "${DTB}"; do
@@ -90,7 +96,7 @@ echo ">> root partition (Alpine ${ALPINE_VERSION})"
 # one fakeroot session: extraction, configuration and mkfs see the same
 # (root) ownership, so the image has root-owned files without real root
 BOARD_IP="${BOARD_IP:-192.168.1.223}" BOARD_GW="${BOARD_GW:-192.168.1.1}" DTB="${DTB}" \
-DE25WEB_TOKEN_FILE="${TOKEN_FILE}" fakeroot -- bash -euo pipefail -c '
+DE25WEB_TOKEN_FILE="${TOKEN_FILE}" BOARD_MAC="${BOARD_MAC}" fakeroot -- bash -euo pipefail -c '
     mkdir -p "$1/root"
     tar xzf "$2" -C "$1/root" --numeric-owner
     "$3/linux/tools/alpine_rootfs_config.sh" "$1/root" "$1/boot"
@@ -115,6 +121,7 @@ DE25WEB_TOKEN_FILE="${TOKEN_FILE}" fakeroot -- bash -euo pipefail -c '
 mmd   -i "${FAT}" ::extlinux
 mcopy -i "${FAT}" "${STAGE}/boot/extlinux/extlinux.conf" ::extlinux/
 MAC="$(cat "${STAGE}/root/etc/de25/mac")"
+[[ -s "${MAC_FILE}" ]] || echo "${MAC}" > "${MAC_FILE}"
 ( umask 077; cat "${STAGE}/root/opt/de25web/token" > "${IMAGES}/de25web_token" )
 rm -rf "${STAGE}"
 
