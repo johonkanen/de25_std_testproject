@@ -32,6 +32,13 @@ entity de25_soc_top is
         SW            : in    std_logic_vector(9 downto 0);
         KEY           : in    std_logic_vector(3 downto 0);
         LEDR          : out   std_logic_vector(9 downto 0);
+        -- six 7-segment displays, common anode (low = lit), see hex_display.vhd
+        HEX0          : out   std_logic_vector(6 downto 0);
+        HEX1          : out   std_logic_vector(6 downto 0);
+        HEX2          : out   std_logic_vector(6 downto 0);
+        HEX3          : out   std_logic_vector(6 downto 0);
+        HEX4          : out   std_logic_vector(6 downto 0);
+        HEX5          : out   std_logic_vector(6 downto 0);
         FPGA_I2C_SCL  : inout std_logic;                     -- PIN_BF120, MAX6650 fan (open-drain)
         FPGA_I2C_SDA  : inout std_logic;                     -- PIN_BH118, MAX6650 fan (open-drain)
         H2F_CLK_TEST  : out   std_logic;                     -- GPIO_D[2] (PIN_BF29) - see h2f_user0_clk_heartbeat.vhd
@@ -90,6 +97,12 @@ architecture rtl of de25_soc_top is
             SW           : in  std_logic_vector(9 downto 0);
             KEY          : in  std_logic_vector(3 downto 0);
             LEDR         : out std_logic_vector(9 downto 0);
+            HEX0         : out std_logic_vector(6 downto 0);
+            HEX1         : out std_logic_vector(6 downto 0);
+            HEX2         : out std_logic_vector(6 downto 0);
+            HEX3         : out std_logic_vector(6 downto 0);
+            HEX4         : out std_logic_vector(6 downto 0);
+            HEX5         : out std_logic_vector(6 downto 0);
 
             axi_awid    : in  std_logic_vector(3 downto 0)  := (others => '0');
             axi_awaddr  : in  std_logic_vector(28 downto 0) := (others => '0');
@@ -269,6 +282,12 @@ begin
             SW           => SW,
             KEY          => KEY,
             LEDR         => LEDR,
+            HEX0         => HEX0,
+            HEX1         => HEX1,
+            HEX2         => HEX2,
+            HEX3         => HEX3,
+            HEX4         => HEX4,
+            HEX5         => HEX5,
 
             axi_awid    => lwh2f_awid,
             axi_awaddr  => lwh2f_awaddr,

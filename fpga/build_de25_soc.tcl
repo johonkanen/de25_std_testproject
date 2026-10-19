@@ -119,6 +119,15 @@ set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/i2c_master_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fan_control/max6650_fan_control.vhd
 
+# LED blinkers (from the DE25-Nano) and the 7-segment displays
+set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_pkg.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_counter.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_scanner.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_breathing.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_sparkle.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_slot.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/led_blinkers.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/hex_display.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/register_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/de25_soc_top.vhd
@@ -160,6 +169,56 @@ set_location_assignment PIN_CF62  -to LEDR[6]
 set_location_assignment PIN_BM69  -to LEDR[7]
 set_location_assignment PIN_CA71  -to LEDR[8]
 set_location_assignment PIN_BR62  -to LEDR[9]
+
+# 7-segment displays HEX0..HEX5, segments 0..6 (from
+# Demonstration/FPGA/golden_top/golden_top.qsf), 1.2-V like the LEDs
+set_location_assignment PIN_BP81  -to HEX0[0]
+set_location_assignment PIN_BM81  -to HEX0[1]
+set_location_assignment PIN_BM89  -to HEX0[2]
+set_location_assignment PIN_BK89  -to HEX0[3]
+set_location_assignment PIN_BH92  -to HEX0[4]
+set_location_assignment PIN_BM92  -to HEX0[5]
+set_location_assignment PIN_BP92  -to HEX0[6]
+set_location_assignment PIN_CA78  -to HEX1[0]
+set_location_assignment PIN_BW78  -to HEX1[1]
+set_location_assignment PIN_BU78  -to HEX1[2]
+set_location_assignment PIN_BR78  -to HEX1[3]
+set_location_assignment PIN_BU81  -to HEX1[4]
+set_location_assignment PIN_BR81  -to HEX1[5]
+set_location_assignment PIN_CA89  -to HEX1[6]
+set_location_assignment PIN_BW89  -to HEX2[0]
+set_location_assignment PIN_BU92  -to HEX2[1]
+set_location_assignment PIN_BR92  -to HEX2[2]
+set_location_assignment PIN_BU89  -to HEX2[3]
+set_location_assignment PIN_BR89  -to HEX2[4]
+set_location_assignment PIN_CF78  -to HEX2[5]
+set_location_assignment PIN_CH78  -to HEX2[6]
+set_location_assignment PIN_CC81  -to HEX3[0]
+set_location_assignment PIN_CA81  -to HEX3[1]
+set_location_assignment PIN_CH81  -to HEX3[2]
+set_location_assignment PIN_CF81  -to HEX3[3]
+set_location_assignment PIN_CF89  -to HEX3[4]
+set_location_assignment PIN_CH89  -to HEX3[5]
+set_location_assignment PIN_CH92  -to HEX3[6]
+set_location_assignment PIN_CF92  -to HEX4[0]
+set_location_assignment PIN_CA92  -to HEX4[1]
+set_location_assignment PIN_CC92  -to HEX4[2]
+set_location_assignment PIN_CL76  -to HEX4[3]
+set_location_assignment PIN_CK76  -to HEX4[4]
+set_location_assignment PIN_CL82  -to HEX4[5]
+set_location_assignment PIN_CK80  -to HEX4[6]
+set_location_assignment PIN_CL85  -to HEX5[0]
+set_location_assignment PIN_CK85  -to HEX5[1]
+set_location_assignment PIN_BK69  -to HEX5[2]
+set_location_assignment PIN_BP71  -to HEX5[3]
+set_location_assignment PIN_BH89  -to HEX5[4]
+set_location_assignment PIN_BH71  -to HEX5[5]
+set_location_assignment PIN_CH62  -to HEX5[6]
+foreach d {HEX0 HEX1 HEX2 HEX3 HEX4 HEX5} {
+    for {set i 0} {$i < 7} {incr i} {
+        set_instance_assignment -name IO_STANDARD "1.2-V" -to "${d}\[$i\]"
+    }
+}
 
 # H2F User0 clock heartbeat test - GPIO_D[2] (see docs/de25_pinout.md and
 # h2f_user0_clk_heartbeat.vhd), from Demonstration/FPGA/golden_top/golden_top.qsf

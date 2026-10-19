@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DE25-Standard</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>DE25-Standard</h1>
+  <span id="conn" class="pill pill-wait">connecting</span>
+  <span class="spacer"></span>
+  <span class="meta">design <code id="git">--------</code></span>
+  <span class="meta">uptime <code id="uptime">-</code></span>
+</header>
+
+<main class="layout">
+  <section class="board-wrap" aria-label="Board">
+    <div id="board" class="board-host"></div>
+    <div id="ledbar" class="ledbar" aria-label="User LEDs, enlarged"></div>
+    <p class="hint">Click the LED strip to pick a blinker. In <b>software</b> mode, click an LED to toggle it. Click a segment of a 7-segment display to draw your own.</p>
+
+    <section class="card ctl" id="ctl-card" aria-labelledby="ctl-title">
+      <div class="ctl-head">
+        <h2 id="ctl-title">Die temperature control</h2>
+        <span id="ctl-status" class="pill pill-wait">-</span>
+      </div>
+      <p id="ctl-none" class="note" hidden>The temperature controller is not answering (temp_control.py) - the fan keeps its last speed, and is raised to 4000 rpm 10 s after the controller stopped.</p>
+      <div class="ctl-stats">
+        <div class="stat"><span class="stat-k">Hottest die</span><span class="stat-v" id="ctl-meas">-</span><span class="stat-s" id="ctl-hottest">-</span></div>
+        <div class="stat"><span class="stat-k">Setpoint</span><span class="stat-v" id="ctl-sp">-</span><span class="stat-s" id="ctl-err">-</span></div>
+        <div class="stat"><span class="stat-k">Fan target</span><span class="stat-v" id="ctl-fan">-</span><span class="stat-s" id="ctl-rpm">-</span></div>
+      </div>
+      <figure class="plot">
+        <figcaption>Hottest die temperature (°C), last 10 minutes</figcaption>
+        <div id="plot-temp" class="plot-host" role="img" aria-label="Hottest die temperature over the last 10 minutes"></div>
+        <figcaption>Fan target (rpm)</figcaption>
+        <div id="plot-fan" class="plot-host" role="img" aria-label="Fan target speed over the last 10 minutes"></div>
+        <div id="plot-tip" class="plot-tip" hidden></div>
+      </figure>
+      <div class="ctl-controls">
+        <div id="ctl-modes" class="seg" role="radiogroup" aria-label="Control mode">
+          <button type="button" role="radio" data-mode="auto" aria-checked="false" title="PI loop holds the hottest die sensor at the setpoint">auto</button>
+          <button type="button" role="radio" data-mode="manual" aria-checked="false" title="A fixed fan speed (the Fan slider)">manual</button>
+          <button type="button" role="radio" data-mode="off" aria-checked="false" title="The loop leaves the fan alone">off</button>
+        </div>
+        <form id="sp-form" class="sp-form">
+          <label for="sp-input">Setpoint</label>
+          <input id="sp-input" type="number" min="25" max="85" step="0.1" inputmode="decimal">
+          <span class="unit">°C</span>
+          <button type="submit">Set</button>
+        </form>
+      </div>
+      <p id="ctl-msg" class="sub" role="status"></p>
+      <details class="volts">
+        <summary>Loop details</summary>
+        <p class="sub" id="ctl-detail">-</p>
+        <p class="sub">PI on the hottest sensor, once a second; the fan speed stays within 1500..6000 rpm (the MAX6650 holds the speed it is given). The fan can only cool: at minimum fan and still below the setpoint, or at full fan and still above it, the loop is <b>saturated</b> and says so. If the controller stops, the fan keeps its speed and is raised to 4000 rpm after 10 s - the fan chip has no over-temperature fail-safe of its own.</p>
+      </details>
+    </section>
+  </section>
+
+  <aside class="panels">
+    <section class="card" id="blinker-card">
+      <h2>LED blinker</h2>
+      <p id="hw-note" class="note" hidden>This bitstream has no hardware blinkers (register 16 bit 0 is clear) - load a build with fpga/source/led_blinkers.vhd.</p>
+      <div id="modes" class="modes" role="radiogroup" aria-label="Blinker mode"></div>
+      <p class="sub">Running in the FPGA: <code id="module-id">-</code></p>
+    </section>
+
+    <section class="card" id="leds-card">
+      <h2>LED register <span class="sub">(software mode)</span></h2>
+      <div id="led-bits" class="bits"></div>
+      <p class="sub">LEDR9 is the heartbeat in software mode.</p>
+    </section>
+
+    <section class="card" id="hex-card">
+      <h2>7-segment displays <span class="sub" id="hex-mode">-</span></h2>
+      <form id="hex-form" class="sp-form">
+        <label for="hex-input">Show</label>
+        <input id="hex-input" type="text" maxlength="8" spellcheck="false" autocomplete="off" placeholder="123abc" aria-label="Six hex digits, HEX5 first">
+        <button type="submit">Set</button>
+      </form>
+      <div id="hex-blank" class="bits" aria-label="Blank a display"></div>
+      <label class="sub"><input id="hex-flip" type="checkbox"> flip - read from the other side of the board (turned 180°)</label>
+      <p class="sub">Highlighted: blanked. Click a segment in the drawing to switch to raw segments.</p>
+      <p id="hex-msg" class="sub" role="status"></p>
+    </section>
+
+    <section class="card" id="soc-card">
+      <h2>SoC sensors <span class="sub">(from the SDM)</span></h2>
+      <p id="soc-none" class="note" hidden>No SoC sensors: the kernel needs CONFIG_SENSORS_SOC64=y (linux/build_de25_linux.sh).</p>
+      <div id="soc-temps" class="sensors"></div>
+      <details class="volts">
+        <summary>Supply voltages</summary>
+        <div id="soc-volts" class="sensors"></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Fan</h2>
+      <div class="row">
+        <input id="fan-target" type="range" min="1500" max="6000" step="100" aria-label="Fan speed, rpm">
+        <code id="fan-target-val" class="num">-</code>
+      </div>
+      <p class="sub">measured <span id="fan-rpm">-</span> rpm · MAX6650 <span id="fan-ok">-</span></p>
+      <p class="sub" id="fan-note"></p>
+    </section>
+
+    <section class="card" id="core-card">
+      <h2>FPGA core</h2>
+      <p class="sub">Running build <code id="core-build">-</code> <span id="core-mismatch" class="pill pill-warn" hidden>not the installed one</span></p>
+      <p class="sub">Installed: <code id="core-installed">-</code></p>
+      <p class="sub">Previous: <code id="core-prev">-</code></p>
+      <form id="core-form" class="update">
+        <input id="core-file" type="file" accept=".tar.gz,.tgz" aria-label="Core bundle">
+        <input id="core-token" type="password" placeholder="token" autocomplete="current-password" aria-label="Core update token">
+        <label class="sub"><input id="core-force" type="checkbox"> force (the board's core has no manifest)</label>
+        <div class="row">
+          <button type="submit">Load core</button>
+          <button type="button" id="core-reload" class="secondary">Reload</button>
+        </div>
+      </form>
+      <p id="core-msg" class="sub" role="status"></p>
+    </section>
+
+    <section class="card" id="rsu-card">
+      <h2>FPGA image</h2>
+      <p class="sub">Running <code id="rsu-image">-</code> <span id="rsu-confirm" class="pill">-</span></p>
+      <p class="sub">P1 holds: <code id="rsu-p1">-</code></p>
+      <p class="sub" id="rsu-fail" hidden></p>
+      <form id="rsu-form" class="update">
+        <input id="rsu-file" type="file" accept=".tar.gz,.tgz" aria-label="RSU bundle">
+        <input id="rsu-token" type="password" placeholder="token" autocomplete="current-password" aria-label="RSU update token">
+        <div class="row">
+          <button type="submit">Write P1 and reboot</button>
+        </div>
+      </form>
+      <p id="rsu-msg" class="sub" role="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>GUI release</h2>
+      <p class="sub">Running <code id="ver">-</code> <span id="pending" class="pill pill-warn" hidden>on test</span></p>
+      <p class="sub">Previous: <code id="prev">-</code></p>
+      <form id="update-form" class="update">
+        <input id="update-file" type="file" accept=".tar.gz,.tgz" aria-label="Release archive">
+        <input id="update-token" type="password" placeholder="token" autocomplete="current-password" aria-label="Update token">
+        <div class="row">
+          <button type="submit">Upload</button>
+          <button type="button" id="rollback" class="secondary">Roll back</button>
+        </div>
+      </form>
+      <p id="update-msg" class="sub" role="status"></p>
+    </section>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

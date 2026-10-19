@@ -12,17 +12,40 @@
 --   addr 4 : read strobe counter            (read only, ++ on every read of 4)
 --   addr 5 : LED register, low 10 bits -> LEDR[8:0] + spare  (read / write)
 --   addr 6 : SW[9:0] slide switches         (read only)
---   addr 7 : KEY[3:0] push-buttons, 1 = pressed  (read only)
+--   addr 7 : KEY[3:0] push-buttons, 1 = pressed; bit 4 CPU_RESET_n
+--            pressed  (read only)
 --   addr 8 : free-running core-clock uptime counter  (read only)
 --   addr 9 : fan target, MAX6650 KTACH register  (read / write)
 --   addr 10: fan tach0/rpm - bits 7:0 raw Tach0Count, bits 23:8 rpm  (RO)
 --   addr 11: fan link status - bits 7:0 Config readback, bit 8
 --            init_done, bit 9 i2c_error                        (RO)
+--   addr 13: LED blinker mode, low 3 bits (read / write) - 0 software,
+--            1 off, 2 counter, 3 scanner, 4 breathing, 5 sparkle
+--   addr 14: LEDR 3..0 brightness, a byte each (RO)
+--   addr 15: LEDR 7..4 brightness (RO)
+--   addr 16: features - bit 0 hardware blinkers, bit 1 HEX displays (RO)
+--   addr 17: blinker module id, four ASCII chars, 0 in modes 0/1 (RO)
 --   addr 18: board variant 0x53544400 ("STD\0"; the DE25-Nano reads 0)  (RO)
 --   addr 19: build id, Unix time of the build (build_id_pkg.vhd)  (RO)
+--   addr 20: LEDR 9..8 brightness, bits 15:0 (RO)
+--   addr 21: HEX value, 24 bits, HEX0 = bits 3:0  (read / write)
+--   addr 22: HEX control - bit 0 raw mode, bit 1 flip (read from the
+--            other side), bits 13:8 blank mask  (R/W)
+--   addr 23: HEX raw segments HEX3..0, a byte each, bits 6:0 g..a  (R/W)
+--   addr 24: HEX raw segments HEX5..4  (R/W)
+--   addr 25: HEX segments driven, HEX3..0, 1 = lit (RO)
+--   addr 26: HEX segments driven, HEX5..4 (RO)
 --
--- LEDR[8:0] follow addr-5 bits 8..0; LEDR[9] is a ~1 Hz heartbeat so the
--- board shows life without a terminal attached.
+-- In blinker mode 0 (the reset default) LEDR[8:0] follow addr-5 bits 8..0
+-- and LEDR[9] is a ~1 Hz heartbeat so the board shows life without a
+-- terminal attached; modes 2..5 hand all ten LEDs to a pattern module
+-- (source/led_blinkers.vhd, source/blinkers/). The HEX displays:
+-- source/hex_display.vhd.
+--
+-- Resets: the power-on counter resets everything, the LWH2F side included.
+-- CPU_RESET_n resets only the user registers and logic (LEDs, blinkers,
+-- HEX, fan target, loopback) - never the AXI side: a button press while
+-- Linux reads over LWH2F used to stall the CPU (plan §5.18).
 --
 -- Fan control (see source/fan_control/max6650_fan_control.vhd): the
 -- board's MAX6650 fan-speed controller hangs off its own I2C bus
@@ -64,6 +87,13 @@ entity register_block is
         ;SW          : in  std_logic_vector(9 downto 0)     -- slide switches
         ;KEY         : in  std_logic_vector(3 downto 0)     -- push-buttons, active low
         ;LEDR        : out std_logic_vector(9 downto 0)     -- red user LEDs
+        -- 7-segment displays, common anode: low = segment lit
+        ;HEX0        : out std_logic_vector(6 downto 0)
+        ;HEX1        : out std_logic_vector(6 downto 0)
+        ;HEX2        : out std_logic_vector(6 downto 0)
+        ;HEX3        : out std_logic_vector(6 downto 0)
+        ;HEX4        : out std_logic_vector(6 downto 0)
+        ;HEX5        : out std_logic_vector(6 downto 0)
 
         -- lwhps2fpga (LWH2F) AXI4 register access.  Runs on core_clock
         -- (de25_soc_top.vhd ties lwhps2fpga_axi_clock to the same 50 MHz
@@ -94,10 +124,9 @@ entity register_block is
         -- Reset for the HPS's own lwhps2fpga bridge hard macro
         -- (de25_soc_top.vhd's hps_subsystem lwhps2fpga_axi_reset_reset),
         -- NOT for axi_lwh2f_bridge.vhd above (that one uses the same
-        -- system_reset internally, see u_axi_lwh2f_bridge below). Same
-        -- power-on-reset delay as the rest of this block (~21 ms at
-        -- 50 MHz, see g_por_cycles) rather than releasing the instant
-        -- CPU_RESET_n deasserts: releasing the HPS-side bridge macro's
+        -- por_reset internally, see u_axi_lwh2f_bridge below). The
+        -- power-on-reset delay only (~100 ms at 50 MHz, see g_por_cycles),
+        -- not CPU_RESET_n: releasing the HPS-side bridge macro's
         -- reset too early - before the FPGA fabric clock/logic driving
         -- it has settled - left it permanently wedged (every AXI
         -- transaction through it hangs the ARM core forever, recoverable
@@ -116,11 +145,13 @@ architecture rtl of register_block is
 
     use work.fpga_interconnect_pkg.all;
 
-    -- synchronous, active-high reset: power-on counter + CPU_RESET_n button
+    -- synchronous, active-high resets: por_reset from the power-on counter
+    -- only (the LWH2F side), user_reset also from the CPU_RESET_n button
     signal por_counter  : natural range 0 to g_por_cycles := g_por_cycles;
     signal reset_meta   : std_logic := '1';
     signal reset_sync   : std_logic := '1';
-    signal system_reset : std_logic := '1';
+    signal por_reset    : std_logic := '1';
+    signal user_reset   : std_logic := '1';
 
     signal bus_to_axi   : fpga_interconnect_record := init_fpga_interconnect;
     signal bus_from_axi : fpga_interconnect_record := init_fpga_interconnect;
@@ -138,6 +169,21 @@ architecture rtl of register_block is
     -- ~1 Hz heartbeat: 50 MHz / 2**26 ~= 0.75 Hz toggle
     signal heartbeat_count : unsigned(25 downto 0) := (others => '0');
     signal heartbeat       : std_logic := '0';
+
+    -- LED blinkers (source/led_blinkers.vhd): register 13 picks the mode,
+    -- levels/id are read back by the web GUI
+    signal blinker_mode_register : std_logic_vector(31 downto 0) := (others => '0');
+    signal blinker_levels        : std_logic_vector(79 downto 0);
+    signal blinker_id            : std_logic_vector(31 downto 0);
+    -- register 16: bit 0 hardware blinkers, bit 1 HEX displays
+    constant c_features : std_logic_vector(31 downto 0) := x"00000003";
+
+    -- HEX displays (source/hex_display.vhd)
+    signal hex_value_register   : std_logic_vector(31 downto 0) := (others => '0');
+    signal hex_control_register : std_logic_vector(31 downto 0) := (others => '0');
+    signal hex_raw_low          : std_logic_vector(31 downto 0) := (others => '0');
+    signal hex_raw_high         : std_logic_vector(31 downto 0) := (others => '0');
+    signal hex_lit              : std_logic_vector(47 downto 0);
 
     -- double-flop the async inputs before they reach the register file
     signal sw_meta,  sw_sync  : std_logic_vector(9 downto 0) := (others => '0');
@@ -166,7 +212,8 @@ architecture rtl of register_block is
 begin
 
 ------------------------------------------------------------------------
-    -- hold reset for ~21 ms after configuration, plus the button
+    -- hold both resets for ~100 ms after configuration; the button then
+    -- drives user_reset only
     reset_synchroniser : process (core_clock) is
     begin
         if rising_edge(core_clock) then
@@ -174,10 +221,12 @@ begin
             reset_sync <= reset_meta;
 
             if por_counter /= 0 then
-                por_counter  <= por_counter - 1;
-                system_reset <= '1';
+                por_counter <= por_counter - 1;
+                por_reset   <= '1';
+                user_reset  <= '1';
             else
-                system_reset <= reset_sync;
+                por_reset   <= '0';
+                user_reset  <= reset_sync;
             end if;
         end if;
     end process reset_synchroniser;
@@ -202,8 +251,39 @@ begin
         end if;
     end process heartbeat_gen;
 
-    LEDR(8 downto 0) <= led_register(8 downto 0);
-    LEDR(9)          <= heartbeat;
+------------------------------------------------------------------------
+    u_led_blinkers : entity work.led_blinkers
+    generic map (
+        g_clock_hz => 50_000_000
+    )
+    port map (
+        clock    => core_clock
+        ,reset   => user_reset
+        ,mode    => unsigned(blinker_mode_register(2 downto 0))
+        ,sw_leds => heartbeat & led_register(8 downto 0)
+        ,leds    => LEDR
+        ,levels  => blinker_levels
+        ,id      => blinker_id
+    );
+
+------------------------------------------------------------------------
+    u_hex_display : entity work.hex_display
+    port map (
+        clock     => core_clock
+        ,reset    => user_reset
+        ,value    => hex_value_register(23 downto 0)
+        ,raw_mode => hex_control_register(0)
+        ,flip     => hex_control_register(1)
+        ,blank    => hex_control_register(13 downto 8)
+        ,raw      => hex_raw_high(15 downto 0) & hex_raw_low
+        ,lit      => hex_lit
+        ,HEX0     => HEX0
+        ,HEX1     => HEX1
+        ,HEX2     => HEX2
+        ,HEX3     => HEX3
+        ,HEX4     => HEX4
+        ,HEX5     => HEX5
+    );
 
 ------------------------------------------------------------------------
     test_registers : process (core_clock) is
@@ -222,7 +302,7 @@ begin
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 6,
                 std_logic_vector(resize(unsigned(sw_sync), 32)));
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 7,
-                std_logic_vector(resize(unsigned(not key_sync), 32)));
+                (31 downto 5 => '0') & reset_sync & (not key_sync));
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 8,
                 std_logic_vector(uptime_counter));
             connect_data_to_address(bus_from_axi, bus_from_top_axi, 9, fan_ktach_register);
@@ -230,19 +310,42 @@ begin
                 x"00" & fan_rpm & fan_tach0);
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 11,
                 (31 downto 10 => '0') & fan_i2c_error & fan_init_done & fan_config_readback);
+            connect_data_to_address(bus_from_axi, bus_from_top_axi, 13, blinker_mode_register);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 14, blinker_levels(31 downto 0));
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 15, blinker_levels(63 downto 32));
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 16, c_features);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 17, blinker_id);
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 18, c_board_variant);
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 19, work.build_id_pkg.build_id);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 20,
+                x"0000" & blinker_levels(79 downto 64));
+            connect_data_to_address(bus_from_axi, bus_from_top_axi, 21, hex_value_register);
+            connect_data_to_address(bus_from_axi, bus_from_top_axi, 22, hex_control_register);
+            connect_data_to_address(bus_from_axi, bus_from_top_axi, 23, hex_raw_low);
+            connect_data_to_address(bus_from_axi, bus_from_top_axi, 24, hex_raw_high);
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 25, hex_lit(31 downto 0));
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 26,
+                x"0000" & hex_lit(47 downto 32));
 
             uptime_counter <= uptime_counter + 1;
 
             bus_to_axi <= bus_from_top_axi;
 
-            if system_reset = '1' then
+            -- the button: the user registers back to their reset values
+            -- (not bus_to_axi: a read in flight still gets its answer)
+            if user_reset = '1' then
                 loopback_register     <= (others => '0');
                 read_counter          <= (others => '0');
                 led_register          <= (others => '0');
-                uptime_counter        <= (others => '0');
                 fan_ktach_register    <= std_logic_vector(to_unsigned(c_fan_ktach_default, 32));
+                blinker_mode_register <= (others => '0');
+                hex_value_register    <= (others => '0');
+                hex_control_register  <= (others => '0');
+                hex_raw_low           <= (others => '0');
+                hex_raw_high          <= (others => '0');
+            end if;
+            if por_reset = '1' then
+                uptime_counter        <= (others => '0');
                 bus_to_axi            <= init_fpga_interconnect;
             end if;
         end if;
@@ -255,7 +358,7 @@ begin
     )
     port map (
         clock   => core_clock
-        ,resetn => not system_reset
+        ,resetn => not por_reset
 
         ,awid    => axi_awid
         ,awaddr  => axi_awaddr
@@ -286,7 +389,7 @@ begin
 
 ------------------------------------------------------------------------
     -- axi_bridge_reset is active-HIGH (see its declaration above and the
-    -- fan controller's `reset => system_reset` a few lines down) - unlike
+    -- fan controller's `reset => user_reset` a few lines down) - unlike
     -- `resetn` above it, it must NOT be inverted. It was: this held the
     -- HPS's lwhps2fpga hard macro released during our own POR hold and
     -- then asserted (permanently in reset) for the rest of normal
@@ -295,7 +398,7 @@ begin
     -- whole session (widening g_por_cycles never had a chance to help,
     -- since the bridge was never actually held in reset during the delay
     -- in the first place - see linux/README.md's session-status notes).
-    axi_bridge_reset <= system_reset;
+    axi_bridge_reset <= por_reset;
 
 ------------------------------------------------------------------------
 -- MAX6650 fan controller, on its own I2C bus - see
@@ -314,7 +417,7 @@ begin
     )
     port map (
         clock            => core_clock
-        ,reset           => system_reset
+        ,reset           => user_reset
         ,ktach_in        => fan_ktach_register(7 downto 0)
         ,rpm_out         => fan_rpm
         ,tach0_out       => fan_tach0

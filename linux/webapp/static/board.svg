@@ -1,0 +1,282 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 770 600" class="board" role="img" aria-label="DE25-Standard board, top view">
+  <!-- Drawn after Figure 2-1 (top view) of the DE25-Standard User Manual
+       (rev D, PDF page 7): positions are the photo's, 1 unit ~ 0.26 mm.
+       Live parts have ids: ledr0..ledr9, hex0..hex5 (segments hexN-a..hexN-g),
+       sw0..sw9, key0..key3, cpu-reset, fan, fan-rotor, fan-label, the
+       #soc-sensors group; hps-led is static.
+
+       Classes shared with the DE25-Nano drawing (style.css already has them):
+       pcb, hole, header, lbl, lbl-on-chip, silk, chip, metal, metal dark,
+       conn-white, fpga-sub, fpga-die, tsd, tsd-dot, tsd-val, fan-ring,
+       fan-rotor (+ spin), fan-hub, led-strip, led, led-glow, led-body,
+       led-off, switch (+ up), sw-body, sw-knob, key (+ pressed), key-body,
+       key-cap, part.
+
+       New classes for style.css (the drawing carries presentation-attribute
+       fallbacks, which CSS overrides):
+         .board .hex-module { fill: #101012; stroke: #000; }
+         .board .hseg       { fill: #3a1a1a; transition: fill 60ms; }
+         .board .hseg.lit   { fill: #ff3b30; }
+         .board .lcd-bezel  { fill: #2a2c30; stroke: #000; }
+         .board .lcd-screen { fill: #9eae8c; }
+         .board .jack       { stroke: #222; }   (audio jacks; colors inline)
+       app.js: segment hexN-x gets class lit when on (HEX0 is the rightmost
+       digit); the LEDs are ledrN (the Nano's were ledN), data-led is N. -->
+  <defs>
+    <filter id="glow" x="-150%" y="-150%" width="400%" height="400%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <pattern id="pins" width="11" height="11" patternUnits="userSpaceOnUse">
+      <rect width="11" height="11" fill="#151515"/>
+      <rect x="3.5" y="3.5" width="4" height="4" fill="#c9a94b"/>
+    </pattern>
+    <pattern id="pins-v" width="12" height="16.5" patternUnits="userSpaceOnUse" x="628" y="182">
+      <rect width="12" height="16.5" fill="#151515"/>
+      <rect x="4" y="6" width="4" height="4" fill="#c9a94b"/>
+    </pattern>
+  </defs>
+
+  <!-- PCB -->
+  <rect x="1" y="1" width="768" height="598" rx="16" class="pcb"/>
+  <g class="hole">
+    <circle cx="22" cy="20" r="11"/><circle cx="748" cy="20" r="11"/>
+    <circle cx="22" cy="578" r="11"/><circle cx="748" cy="578" r="11"/>
+    <circle cx="26" cy="150" r="11"/><circle cx="738" cy="148" r="11"/>
+  </g>
+
+  <!-- top edge: 1x6 GPIO, USB host x2, Ethernet, audio, video in, HDMI -->
+  <rect x="62" y="2" width="52" height="38" rx="2" class="chip"/>
+  <rect x="55" y="22" width="66" height="11" fill="url(#pins)" class="header"/>
+  <text x="88" y="52" class="lbl">GPIO 1x6</text>
+
+  <rect x="150" y="0" width="68" height="70" rx="3" class="metal"/>
+  <rect x="158" y="8" width="52" height="16" rx="1" class="metal dark"/>
+  <rect x="226" y="0" width="68" height="70" rx="3" class="metal"/>
+  <rect x="234" y="8" width="52" height="16" rx="1" class="metal dark"/>
+  <text x="222" y="82" class="lbl">USB host x2</text>
+
+  <rect x="310" y="0" width="82" height="104" rx="3" class="metal"/>
+  <rect x="326" y="38" width="50" height="52" rx="2" class="metal dark"/>
+  <text x="351" y="116" class="lbl">Ethernet</text>
+
+  <rect x="410" y="2" width="34" height="62" rx="3" class="jack" fill="#d9668c" stroke="#222"/>
+  <circle cx="427" cy="16" r="7" fill="#222"/>
+  <rect x="455" y="2" width="34" height="62" rx="3" class="jack" fill="#2a8fd0" stroke="#222"/>
+  <circle cx="472" cy="16" r="7" fill="#222"/>
+  <rect x="500" y="2" width="36" height="62" rx="3" class="jack" fill="#8fd19e" stroke="#222"/>
+  <circle cx="518" cy="16" r="7" fill="#222"/>
+  <text x="427" y="76" class="lbl">MIC</text>
+  <text x="472" y="76" class="lbl">LINE IN</text>
+  <text x="518" y="86" class="lbl">LINE OUT</text>
+
+  <rect x="565" y="2" width="46" height="72" rx="3" class="metal"/>
+  <circle cx="588" cy="24" r="13" class="metal dark"/>
+  <circle cx="588" cy="24" r="4" fill="#222"/>
+  <text x="588" y="86" class="lbl">VIDEO IN</text>
+
+  <rect x="648" y="0" width="68" height="36" rx="3" class="metal"/>
+  <path d="M658 8 H706 V18 L700 26 H664 L658 18 Z" class="metal dark"/>
+  <text x="682" y="48" class="lbl">HDMI</text>
+  <rect x="650" y="88" width="50" height="48" rx="2" class="chip"/>
+
+  <rect x="735" y="48" width="22" height="80" rx="2" class="conn-white"/>
+  <text x="728" y="92" class="lbl" text-anchor="end">MIPI</text>
+
+  <!-- left edge: micro-SD, USB-C, DC jack, power switch, ADC header -->
+  <rect x="4" y="70" width="80" height="50" rx="3" class="metal"/>
+  <rect x="10" y="80" width="40" height="30" rx="2" class="metal dark"/>
+  <text x="44" y="132" class="lbl">microSD</text>
+
+  <rect x="0" y="172" width="44" height="36" rx="10" class="metal"/>
+  <rect x="2" y="182" width="30" height="16" rx="6" class="metal dark"/>
+  <text x="52" y="187" class="lbl" text-anchor="start">USB-C</text>
+  <text x="52" y="198" class="lbl" text-anchor="start">Blaster III / UART</text>
+
+  <rect x="0" y="245" width="64" height="46" rx="4" class="metal dark"/>
+  <text x="72" y="271" class="lbl" text-anchor="start">DC 12V</text>
+  <circle cx="26" cy="318" r="13" fill="#d33a2f" stroke="#7a1a14" stroke-width="2"/>
+  <text x="46" y="322" class="lbl" text-anchor="start">POWER</text>
+
+  <rect x="2" y="353" width="40" height="76" rx="2" class="chip"/>
+  <rect x="11" y="363" width="22" height="55" fill="url(#pins)" class="header"/>
+  <text x="22" y="442" class="lbl">ADC</text>
+
+  <!-- 128x64 character LCD -->
+  <rect x="68" y="356" width="178" height="136" rx="4" class="lcd-bezel" fill="#2a2c30" stroke="#000"/>
+  <rect x="80" y="372" width="154" height="96" rx="2" class="lcd-screen" fill="#9eae8c"/>
+  <text x="157" y="425" class="lbl" style="fill:#55604a">128x64 LCD</text>
+
+  <!-- memories, QSPI flash, a few other chips -->
+  <rect x="205" y="98" width="34" height="34" rx="2" class="chip"/>
+  <rect x="420" y="98" width="36" height="36" rx="2" class="chip"/>
+  <rect x="200" y="252" width="34" height="34" rx="2" class="chip"/>
+  <rect x="318" y="193" width="64" height="42" rx="2" class="chip"/>
+  <rect x="318" y="244" width="64" height="44" rx="2" class="chip"/>
+  <text x="350" y="300" class="lbl">DDR4</text>
+  <rect x="355" y="373" width="40" height="40" rx="2" class="chip"/>
+  <text x="375" y="425" class="lbl">SDRAM</text>
+  <rect x="508" y="160" width="36" height="22" rx="2" class="chip"/>
+  <text x="502" y="175" class="lbl" text-anchor="end">QSPI</text>
+
+  <!-- the FPGA (the installed fan sits on top of it, drawn after) -->
+  <g class="fpga">
+    <rect x="408" y="201" width="142" height="142" rx="4" class="fpga-sub"/>
+    <rect x="451" y="244" width="56" height="56" rx="3" class="fpga-die"/>
+    <text x="479" y="372" class="lbl">AGILEX 5</text>
+  </g>
+
+  <!-- fan: the heatsink fan on the FPGA, its connector by the LCD -->
+  <g id="fan" class="part" tabindex="0" aria-label="FPGA fan">
+    <rect x="255" y="403" width="50" height="20" rx="2" class="conn-white"/>
+    <g transform="translate(479 272) scale(3.4)">
+      <circle r="17" class="fan-ring" vector-effect="non-scaling-stroke"/>
+      <g id="fan-rotor" class="fan-rotor">
+        <path d="M0 -14 C6 -10 6 -4 0 0 C-6 -4 -6 -10 0 -14Z"/>
+        <path d="M0 -14 C6 -10 6 -4 0 0 C-6 -4 -6 -10 0 -14Z" transform="rotate(72)"/>
+        <path d="M0 -14 C6 -10 6 -4 0 0 C-6 -4 -6 -10 0 -14Z" transform="rotate(144)"/>
+        <path d="M0 -14 C6 -10 6 -4 0 0 C-6 -4 -6 -10 0 -14Z" transform="rotate(216)"/>
+        <path d="M0 -14 C6 -10 6 -4 0 0 C-6 -4 -6 -10 0 -14Z" transform="rotate(288)"/>
+      </g>
+      <circle r="3.5" class="fan-hub"/>
+    </g>
+    <text id="fan-label" x="280" y="397" class="lbl live">FAN</text>
+  </g>
+
+  <!-- The SoC's temperature sensors (SDM-read, soc64-hwmon), each at its
+       corner of the package, outside the fan - approximate, mapped as on the
+       DE25-Nano drawing: the three corner sensors by their names; the SDM in
+       the remaining (top left) corner by elimination; the die assumed to sit
+       in the same orientation as this drawing. data-sensor matches the
+       sensor's label; app.js fills them in. -->
+  <g id="soc-sensors">
+    <g class="tsd" data-sensor="SDM"><title>Main Die SDM (approximate position)</title>
+      <circle class="tsd-dot" cx="415" cy="208" r="4"/><text class="tsd-val" x="408" y="196"></text></g>
+    <g class="tsd" data-sensor="top right"><title>Main Die corner top right max (approximate position)</title>
+      <circle class="tsd-dot" cx="543" cy="208" r="4"/><text class="tsd-val" x="550" y="196" text-anchor="end"></text></g>
+    <g class="tsd" data-sensor="bottom left"><title>Main Die corner bottom left max (approximate position)</title>
+      <circle class="tsd-dot" cx="415" cy="336" r="4"/><text class="tsd-val" x="408" y="357"></text></g>
+    <g class="tsd" data-sensor="bottom right"><title>Main Die corner bottom right max (approximate position)</title>
+      <circle class="tsd-dot" cx="543" cy="336" r="4"/><text class="tsd-val" x="550" y="357" text-anchor="end"></text></g>
+  </g>
+
+  <!-- right side: 2x20 DE-GPIO header, HSMC -->
+  <rect x="628" y="182" width="24" height="330" fill="url(#pins-v)" class="header"/>
+  <text x="668" y="347" class="lbl" transform="rotate(-90 668 347)">DE-GPIO 2x20</text>
+  <rect x="722" y="172" width="36" height="370" rx="2" class="chip"/>
+  <rect x="733" y="180" width="14" height="110" rx="1" class="metal dark"/>
+  <rect x="733" y="302" width="14" height="110" rx="1" class="metal dark"/>
+  <rect x="733" y="424" width="14" height="110" rx="1" class="metal dark"/>
+  <text x="712" y="357" class="lbl" transform="rotate(-90 712 357)">HSMC</text>
+
+  <!-- MSEL DIP switch -->
+  <rect x="656" y="505" width="34" height="22" rx="2" class="sw-body"/>
+  <text x="673" y="500" class="lbl">MSEL</text>
+
+  <text x="555" y="470" class="silk" text-anchor="middle">DE25-Standard</text>
+  <!-- six 7-segment displays HEX5..HEX0, left to right (HEX0 rightmost) -->
+  <g id="hex" class="part" aria-label="7-segment displays">
+    <rect x="240" y="438" width="72" height="64" rx="2" class="hex-module" fill="#101012" stroke="#000"/>
+    <rect x="315" y="438" width="72" height="64" rx="2" class="hex-module" fill="#101012" stroke="#000"/>
+    <rect x="390" y="438" width="72" height="64" rx="2" class="hex-module" fill="#101012" stroke="#000"/>
+    <g id="hex5" class="hex" transform="translate(249 448) skewX(-6)">
+      <polygon id="hex5-a" class="hseg" fill="#3a1a1a" points="3,2 5,0 19,0 21,2 19,4 5,4"/>
+      <polygon id="hex5-b" class="hseg" fill="#3a1a1a" points="22,3 24,5 24,19 22,21 20,19 20,5"/>
+      <polygon id="hex5-c" class="hseg" fill="#3a1a1a" points="22,23 24,25 24,39 22,41 20,39 20,25"/>
+      <polygon id="hex5-d" class="hseg" fill="#3a1a1a" points="3,42 5,40 19,40 21,42 19,44 5,44"/>
+      <polygon id="hex5-e" class="hseg" fill="#3a1a1a" points="2,23 4,25 4,39 2,41 0,39 0,25"/>
+      <polygon id="hex5-f" class="hseg" fill="#3a1a1a" points="2,3 4,5 4,19 2,21 0,19 0,5"/>
+      <polygon id="hex5-g" class="hseg" fill="#3a1a1a" points="3,22 5,20 19,20 21,22 19,24 5,24"/>
+    </g>
+    <g id="hex4" class="hex" transform="translate(281 448) skewX(-6)">
+      <polygon id="hex4-a" class="hseg" fill="#3a1a1a" points="3,2 5,0 19,0 21,2 19,4 5,4"/>
+      <polygon id="hex4-b" class="hseg" fill="#3a1a1a" points="22,3 24,5 24,19 22,21 20,19 20,5"/>
+      <polygon id="hex4-c" class="hseg" fill="#3a1a1a" points="22,23 24,25 24,39 22,41 20,39 20,25"/>
+      <polygon id="hex4-d" class="hseg" fill="#3a1a1a" points="3,42 5,40 19,40 21,42 19,44 5,44"/>
+      <polygon id="hex4-e" class="hseg" fill="#3a1a1a" points="2,23 4,25 4,39 2,41 0,39 0,25"/>
+      <polygon id="hex4-f" class="hseg" fill="#3a1a1a" points="2,3 4,5 4,19 2,21 0,19 0,5"/>
+      <polygon id="hex4-g" class="hseg" fill="#3a1a1a" points="3,22 5,20 19,20 21,22 19,24 5,24"/>
+    </g>
+    <g id="hex3" class="hex" transform="translate(324 448) skewX(-6)">
+      <polygon id="hex3-a" class="hseg" fill="#3a1a1a" points="3,2 5,0 19,0 21,2 19,4 5,4"/>
+      <polygon id="hex3-b" class="hseg" fill="#3a1a1a" points="22,3 24,5 24,19 22,21 20,19 20,5"/>
+      <polygon id="hex3-c" class="hseg" fill="#3a1a1a" points="22,23 24,25 24,39 22,41 20,39 20,25"/>
+      <polygon id="hex3-d" class="hseg" fill="#3a1a1a" points="3,42 5,40 19,40 21,42 19,44 5,44"/>
+      <polygon id="hex3-e" class="hseg" fill="#3a1a1a" points="2,23 4,25 4,39 2,41 0,39 0,25"/>
+      <polygon id="hex3-f" class="hseg" fill="#3a1a1a" points="2,3 4,5 4,19 2,21 0,19 0,5"/>
+      <polygon id="hex3-g" class="hseg" fill="#3a1a1a" points="3,22 5,20 19,20 21,22 19,24 5,24"/>
+    </g>
+    <g id="hex2" class="hex" transform="translate(356 448) skewX(-6)">
+      <polygon id="hex2-a" class="hseg" fill="#3a1a1a" points="3,2 5,0 19,0 21,2 19,4 5,4"/>
+      <polygon id="hex2-b" class="hseg" fill="#3a1a1a" points="22,3 24,5 24,19 22,21 20,19 20,5"/>
+      <polygon id="hex2-c" class="hseg" fill="#3a1a1a" points="22,23 24,25 24,39 22,41 20,39 20,25"/>
+      <polygon id="hex2-d" class="hseg" fill="#3a1a1a" points="3,42 5,40 19,40 21,42 19,44 5,44"/>
+      <polygon id="hex2-e" class="hseg" fill="#3a1a1a" points="2,23 4,25 4,39 2,41 0,39 0,25"/>
+      <polygon id="hex2-f" class="hseg" fill="#3a1a1a" points="2,3 4,5 4,19 2,21 0,19 0,5"/>
+      <polygon id="hex2-g" class="hseg" fill="#3a1a1a" points="3,22 5,20 19,20 21,22 19,24 5,24"/>
+    </g>
+    <g id="hex1" class="hex" transform="translate(399 448) skewX(-6)">
+      <polygon id="hex1-a" class="hseg" fill="#3a1a1a" points="3,2 5,0 19,0 21,2 19,4 5,4"/>
+      <polygon id="hex1-b" class="hseg" fill="#3a1a1a" points="22,3 24,5 24,19 22,21 20,19 20,5"/>
+      <polygon id="hex1-c" class="hseg" fill="#3a1a1a" points="22,23 24,25 24,39 22,41 20,39 20,25"/>
+      <polygon id="hex1-d" class="hseg" fill="#3a1a1a" points="3,42 5,40 19,40 21,42 19,44 5,44"/>
+      <polygon id="hex1-e" class="hseg" fill="#3a1a1a" points="2,23 4,25 4,39 2,41 0,39 0,25"/>
+      <polygon id="hex1-f" class="hseg" fill="#3a1a1a" points="2,3 4,5 4,19 2,21 0,19 0,5"/>
+      <polygon id="hex1-g" class="hseg" fill="#3a1a1a" points="3,22 5,20 19,20 21,22 19,24 5,24"/>
+    </g>
+    <g id="hex0" class="hex" transform="translate(431 448) skewX(-6)">
+      <polygon id="hex0-a" class="hseg" fill="#3a1a1a" points="3,2 5,0 19,0 21,2 19,4 5,4"/>
+      <polygon id="hex0-b" class="hseg" fill="#3a1a1a" points="22,3 24,5 24,19 22,21 20,19 20,5"/>
+      <polygon id="hex0-c" class="hseg" fill="#3a1a1a" points="22,23 24,25 24,39 22,41 20,39 20,25"/>
+      <polygon id="hex0-d" class="hseg" fill="#3a1a1a" points="3,42 5,40 19,40 21,42 19,44 5,44"/>
+      <polygon id="hex0-e" class="hseg" fill="#3a1a1a" points="2,23 4,25 4,39 2,41 0,39 0,25"/>
+      <polygon id="hex0-f" class="hseg" fill="#3a1a1a" points="2,3 4,5 4,19 2,21 0,19 0,5"/>
+      <polygon id="hex0-g" class="hseg" fill="#3a1a1a" points="3,22 5,20 19,20 21,22 19,24 5,24"/>
+    </g>
+  </g>
+
+  <!-- red LEDs LEDR9..LEDR0, left to right -->
+  <g id="leds" class="part" tabindex="0" aria-label="User LEDs - choose a blinker">
+    <rect x="47" y="504" width="336" height="22" rx="3" class="led-strip"/>
+    <g id="ledr9" class="led" data-led="9" transform="translate(61.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr8" class="led" data-led="8" transform="translate(94.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr7" class="led" data-led="7" transform="translate(127.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr6" class="led" data-led="6" transform="translate(160.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr5" class="led" data-led="5" transform="translate(193.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr4" class="led" data-led="4" transform="translate(226.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr3" class="led" data-led="3" transform="translate(259.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr2" class="led" data-led="2" transform="translate(292.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr1" class="led" data-led="1" transform="translate(325.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+    <g id="ledr0" class="led" data-led="0" transform="translate(358.5 509)"><circle class="led-glow" cx="3.5" cy="6" r="8" filter="url(#glow)"/><rect class="led-body" width="7" height="12" rx="1"/></g>
+  </g>
+
+  <!-- slide switches SW9..SW0, left to right -->
+  <g id="switches" class="part">
+    <g id="sw9" class="switch" transform="translate(54 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW9</text></g>
+    <g id="sw8" class="switch" transform="translate(87 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW8</text></g>
+    <g id="sw7" class="switch" transform="translate(120 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW7</text></g>
+    <g id="sw6" class="switch" transform="translate(153 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW6</text></g>
+    <g id="sw5" class="switch" transform="translate(186 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW5</text></g>
+    <g id="sw4" class="switch" transform="translate(219 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW4</text></g>
+    <g id="sw3" class="switch" transform="translate(252 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW3</text></g>
+    <g id="sw2" class="switch" transform="translate(285 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW2</text></g>
+    <g id="sw1" class="switch" transform="translate(318 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW1</text></g>
+    <g id="sw0" class="switch" transform="translate(351 534)"><rect width="22" height="46" rx="2" class="sw-body"/><rect class="sw-knob" x="4" y="25" width="14" height="17" rx="2"/><text x="11" y="56" class="lbl">SW0</text></g>
+  </g>
+
+  <!-- push-buttons KEY3..KEY0, left to right -->
+  <g id="key3" class="key" transform="translate(382 532)"><rect width="48" height="48" rx="4" class="key-body"/><circle class="key-cap" cx="24" cy="24" r="15"/><text x="24" y="58" class="lbl">KEY3</text></g>
+  <g id="key2" class="key" transform="translate(437 532)"><rect width="48" height="48" rx="4" class="key-body"/><circle class="key-cap" cx="24" cy="24" r="15"/><text x="24" y="58" class="lbl">KEY2</text></g>
+  <g id="key1" class="key" transform="translate(492 532)"><rect width="48" height="48" rx="4" class="key-body"/><circle class="key-cap" cx="24" cy="24" r="15"/><text x="24" y="58" class="lbl">KEY1</text></g>
+  <g id="key0" class="key" transform="translate(547 532)"><rect width="48" height="48" rx="4" class="key-body"/><circle class="key-cap" cx="24" cy="24" r="15"/><text x="24" y="58" class="lbl">KEY0</text></g>
+
+  <!-- bottom right: CPU_RESET_n (PB9, FPGA side), HPS_COLD_RESET_N (PB7),
+       HPS_KEY (PB4), HPS LED - the HPS ones are not in the FPGA's register map -->
+  <g id="cpu-reset" class="key" transform="translate(664 574)"><rect width="16" height="16" rx="2" class="key-body"/><circle class="key-cap" cx="8" cy="8" r="5"/></g>
+  <text x="675" y="568" class="lbl" text-anchor="start" transform="rotate(-90 675 568)">CPU_RST</text>
+  <rect x="684" y="574" width="16" height="16" rx="2" class="key-body"/>
+  <text x="695" y="568" class="lbl" text-anchor="start" transform="rotate(-90 695 568)">HPS_RST</text>
+  <rect x="704" y="574" width="16" height="16" rx="2" class="key-body"/>
+  <text x="715" y="568" class="lbl" text-anchor="start" transform="rotate(-90 715 568)">HPS_KEY</text>
+  <rect id="hps-led" x="726" y="556" width="10" height="7" rx="1" class="led-off"/>
+  <text x="731" y="551" class="lbl">HPS</text>
+</svg>

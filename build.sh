@@ -4,6 +4,7 @@
 #   ./build.sh fpga-project   create or refresh the Quartus project in build/fpga
 #   ./build.sh fpga           ... and compile it -> build/fpga/output_files/de25_soc.sof
 #                             (HPS-first; FPGA_FIRST=1: an FPGA-first image)
+#   ./build.sh sim            VHDL testbenches (VUnit + nvc) -> build/sim
 #   ./build.sh linux          ATF + U-Boot + kernel (linux/build_de25_linux.sh)
 #   ./build.sh jic            QSPI image -> build/images/de25_std.jic
 #   ./build.sh sdcard         SD card image -> build/images/sdcard.img.gz
@@ -36,6 +37,8 @@ fpga() {
     )
 }
 
+sim() { python3 "${ROOT}/fpga/vunit_run_de25_std_test.py" "${@}"; }
+
 linux() { "${ROOT}/linux/build_de25_linux.sh"; }
 
 jic() { "${ROOT}/linux/make_jic.sh"; }
@@ -45,9 +48,10 @@ sdcard() { "${ROOT}/linux/tools/make_sdcard_image.sh"; }
 case "${1:-}" in
     fpga-project) fpga_project ;;
     fpga)         fpga ;;
+    sim)          shift; sim "$@" ;;
     linux)        linux ;;
     jic)          jic ;;
     sdcard)       sdcard ;;
     all)          fpga; linux; jic; sdcard ;;
-    *)            sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *)            sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
