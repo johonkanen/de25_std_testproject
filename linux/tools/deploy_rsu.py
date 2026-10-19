@@ -81,7 +81,10 @@ def main():
     base = f"http://{args.host}:{args.port}"
 
     # two boards on one LAN: check this is the board the bundle is for
-    code, ver = request(base + "/api/version", timeout=10)
+    try:
+        code, ver = request(base + "/api/version", timeout=10)
+    except (OSError, http.client.HTTPException) as e:
+        sys.exit(f"{base} does not answer ({e}) - still booting, or wrong --host?")
     if code != 200 or ver.get("board") != BOARD:
         sys.exit(f"{base} is {ver.get('board')!r} ({code}), the bundles here are for {BOARD!r} - wrong --host?")
     rsu, fpga = status(base)

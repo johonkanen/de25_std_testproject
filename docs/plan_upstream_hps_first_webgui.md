@@ -1,9 +1,10 @@
 # Plan: DE25-Standard to upstream boot, HPS-first, network updates, web GUI
 
-Status 2026-10-18: Phase 0b and Phase A done - the upstream stack boots
-Alpine on the board (A8 results under "Phase A progress"). Phase B passed
-on the board 2026-10-19 except B1b's watchdog-expiry check ("Phase B
-progress"). Next: that check, then Phase C.
+Status 2026-10-19: Phases 0b, A-E done on the board; Phase F (remote
+system update) F1-F7 done on the board, B1b's watchdog expiry included
+(with the RSU layout it falls back to the factory image - "Phase F
+progress"). Open: §6 rows 28/30, the full-load SAFE_FAN_RPM check, §5.14
+Ethernet hardening, partial reconfiguration, optional GUI items.
 Branch `upstream-hps-first`. §2 describes the
 repository *before* Phase 0b; paths elsewhere are the new ones (`fpga/`,
 `tools/`, `build/`). The reference implementation is the sister repository
@@ -674,8 +675,8 @@ core deleted, the next power-on prints `core from QSPI`.
 - Card core renamed, power-on: `Failed to load 'de25_std.core.rbf'`, header
   and 1011712 bytes from QSPI 0xC00000/0xC01000, `FPGA reconfiguration OK!`,
   `core from QSPI`, Linux up, the same build id. Card core restored.
-- Open: B1b - what a watchdog expiry does with `Rst_sdm_wd_config` 2 and no
-  RSU layout (someone at the switch).
+- B1b: done in Phase F with the RSU layout - a watchdog expiry falls back
+  to the factory image ("Phase F progress"). Not tried on the plain layout.
 
 Note for the Standard: between power-on and the core load the fabric I/O
 is tri-stated, so the MAX6650 runs at its power-up default (loud) for a
@@ -1044,8 +1045,20 @@ has no manifest).
     instead of the 403. `deploy_web.request` (used by deploy_web/fpga/rsu)
     now sends the headers, waits 1 s for an early answer, then the body;
     all three print the 403 with a wrong token.
-  - Next: the watchdog fallback (kill rsu-confirm - also closes B1b) and a
-    power cut after the P1 erase (someone at the switch).
+  - Watchdog fallback (closes B1b): `kill -KILL` rsu-confirm on a
+    confirmed P1 ("watchdog0: watchdog did not stop!"); the watchdog
+    expired, the SDM loaded the factory image (SPL `u-boot_FACTORY_IMAGE.itb`,
+    `core de25_std_FACTORY_IMAGE.core.rbf from SD`), rsu-confirm "factory
+    image healthy after 12 s"; `/api/rsu` factory, FAILED image 0x400000.
+    (TERM would not do: it disarms with the magic close.)
+  - Power cut after the P1 erase: `rsu_client --erase 0` (P1, the first
+    step of `install_rsu` - the flash as a cut there leaves it), then a
+    power cycle: cold boot into the factory image, healthy at 16 s,
+    "P1 is empty"; the fail record from the watchdog test was gone (the
+    power cycle clears it). `deploy_rsu.py` from the factory image: written
+    in 13.7 s, rebooted into P1, confirmed at 11 s (53 s in all). A
+    further power cycle: cold boot picks P1 by priority, confirmed at 12 s.
+    Phase F's on-board tests are done; F7 complete.
 - **Partial reconfiguration** of the blinkers:
   `nano:docs/partial_reconfiguration_plan.md` (written for the Nano; the
   same structure applies with 10 LEDs).
