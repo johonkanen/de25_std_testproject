@@ -41,7 +41,9 @@ mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
 
 USERS=$(pgrep -f /opt/de25web/ || true)
 [ -n "$USERS" ] && kill -STOP $USERS
-resume() { [ -n "$USERS" ] && kill -CONT $USERS; }
+# (not `[ -n ] && kill`: with no users that returns 1, and busybox sh makes
+# the EXIT trap's status the script's - a good load then exited 1)
+resume() { [ -z "$USERS" ] || kill -CONT $USERS; }
 trap resume EXIT
 
 # a fresh overlay each time: re-applying is what triggers the load

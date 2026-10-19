@@ -1,10 +1,9 @@
 # Plan: DE25-Standard to upstream boot, HPS-first, network updates, web GUI
 
 Status 2026-10-18: Phase 0b and Phase A done - the upstream stack boots
-Alpine on the board (A8 results under "Phase A progress"). Phase B built
-(B1, B1b, B4; B2/B3 were done in A), B6 steps 1-2 done - **stopped before
-the first HPS-first power-on**; continue with B6 step 3 ("Phase B
-progress").
+Alpine on the board (A8 results under "Phase A progress"). Phase B passed
+on the board 2026-10-19 except B1b's watchdog-expiry check ("Phase B
+progress"). Next: that check, then Phase C.
 Branch `upstream-hps-first`. §2 describes the
 repository *before* Phase 0b; paths elsewhere are the new ones (`fpga/`,
 `tools/`, `build/`). The reference implementation is the sister repository
@@ -649,7 +648,7 @@ shows `Stratix10 SOC FPGA Manager registered` and `FPGA Region probed`;
 `board id 0xde25`, twice in a row, Linux keeps running; with the card
 core deleted, the next power-on prints `core from QSPI`.
 
-**Phase B progress (2026-10-18, uncommitted at the stop):**
+**Phase B progress (built 2026-10-18, tested 2026-10-19):**
 - B1: `HPS FIRST` is the default, `FPGA_FIRST=1` the fallback (tcl,
   build.sh, READMEs). B1b: `Rst_sdm_wd_config` 2 in the tcl and the `.ip`;
   the generated sopcinfo shows 2. Fit 619 ALMs, timing met (CLOCK0_50 hold
@@ -662,11 +661,21 @@ core deleted, the next power-on prints `core from QSPI`.
   flash, preboot skipped, `fpga0` + FPGA Region probed). Clean `poweroff`
   seen (`re-mounted ... ro`, `reboot: Power down`).
 - B6 step 2: HPS-first `.jic` programmed, verify OK.
-- **Next:** power-cycle (step 3) with a console logger; expect `core from
-  SD`, `md.l 0x10d120dc 1` = 3 (only after the preboot; do not read LWH2F
-  at a stopped prompt before `bridge enable`); then `fpga-reload` twice,
-  then the card core moved aside -> `core from QSPI`; B1b's open question
-  (watchdog expiry with the plain layout) with someone at the switch.
+- B6 step 3, 2026-10-19: power-on HPS-first boots; sysmgr `FPGA_CONFIG` 3
+  and `BRGMODRST` 0 in Linux; LWH2F reg 1 `0000de25`, 18 `53544400`,
+  19 `6ad52a6e` (= the build, 1792354926); `fpga0` + FPGA Region probed
+  (the manager's first probe defers: "couldn't get service channel").
+  (The console of this first boot was not captured.)
+- `fpga-reload` twice: `overlay applied, FPGA manager operating, 2.14 s`,
+  id and variant right, Linux keeps running. **Bug fixed** (also in the
+  Nano's copy): it exited 1 after a good load - `resume() { [ -n "$USERS" ]
+  && kill ...; }` returns 1 with no /opt/de25web processes and busybox sh
+  makes the EXIT trap's status the script's.
+- Card core renamed, power-on: `Failed to load 'de25_std.core.rbf'`, header
+  and 1011712 bytes from QSPI 0xC00000/0xC01000, `FPGA reconfiguration OK!`,
+  `core from QSPI`, Linux up, the same build id. Card core restored.
+- Open: B1b - what a watchdog expiry does with `Rst_sdm_wd_config` 2 and no
+  RSU layout (someone at the switch).
 
 Note for the Standard: between power-on and the core load the fabric I/O
 is tri-stated, so the MAX6650 runs at its power-up default (loud) for a
