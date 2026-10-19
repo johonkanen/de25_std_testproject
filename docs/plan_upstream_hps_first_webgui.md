@@ -824,10 +824,30 @@ against board and `--sim`.
 - `temp_control.py` logs routine regulating <-> saturated changes at most
   every 30 s (at the 1500 rpm floor the KTACH rounding flipped it every
   second).
-- Open (C7): fan rpm at KTACH targets 1500/2500/4000/6000 (`config_readback`
-  0x29 already seen); re-fit the plant from a step response (the die sits
-  at 37-40 °C at 1500 rpm in this room, so 42 °C is saturated low); press
-  CPU_RESET (PB9) with Linux running; safe rpm under full load (§5.17).
+- C7 fan (2026-10-19, loop off, 30 s per target; register 10 after 10 s):
+
+  | target (KTACH) | measured rpm |
+  |---|---|
+  | 1507 (78) | 1560-1620 |
+  | 2480 (47) | 2520-2580 |
+  | 3968 (29) | 3840-4080, mean 3993 |
+  | 5952 (19) | 5520-6060, still rising |
+  | 11904 (9), beyond the fan | 6660-6720: the fan's top |
+
+  Register 10 agrees with the target within ~4 % (60 rpm steps), so
+  `rpm = 60 x Tach0Count` is right; `config_readback` 0x29. FAN_MAX_RPM
+  6000 stays (headroom below the 6700 top). The MAX6650's own regulation
+  is slow: ~250 rpm/s up, ~20 s from 6000 down to 1500 - an actuator lag
+  the plant model should carry.
+- C7 CPU_RESET (PB9) pressed with Linux running: Linux, the GUI and LWH2F
+  unaffected; the user registers reset (HEX 123abc -> 0, LEDs 0x155 -> 0);
+  register 7 bit 4 seen; the fan briefly sped up (the fabric set the
+  MAX6650 up again) and the loop took it back to 1500 rpm. §5.18 closed.
+- C7 thermal: the sim plant stays the first guess (decided 2026-10-19:
+  not worth an accurate fit). On the board the die sits at 35-40 °C at
+  1500 rpm in this room, so at 42 °C the loop reports "saturated low",
+  which is the honest answer; the gains stay at Kp 320, Ki 11.
+- Not run: the full-CPU-load check of `SAFE_FAN_RPM` (§5.17).
 
 ### Phase D - GUI updates over the network
 
@@ -1123,7 +1143,8 @@ temperature under full load (measure in C7).
 ### 5.18 CPU_RESET_n resets the LWH2F bridge side (Standard)
 `axi_bridge_reset <= system_reset`, and `system_reset` follows the
 button. Fixed in C1 (the bridge side runs from the power-on counter only);
-press it with Linux running once in C7 to confirm.
+confirmed in C7: pressing it with Linux running resets only the user
+registers.
 
 ### 5.19 WSL2 host
 USB devices must be attached with `usbipd.exe attach --wsl --busid <id>`
@@ -1209,8 +1230,8 @@ need the board.
 | Is `192.168.1.223` free on the LAN? | ask the user / `ping` before use |
 | Does the SDM report 500 MHz for the QSPI reference clock here too? | **No: 400 MHz** (SPL, 2026-10-18); the Linux DT uses it |
 | Is a CR1220 cell fitted? | `hwclock -r` after a power-off |
-| Fan: max rpm, and is reg 10's `rpm = 60 x Tach0Count` right with the 0.5 s count window (Count register 0x01)? | C7: compare with a phone tachometer/strobe or by ear at known targets |
-| Safe fan rpm under full CPU load (no MAX6650 fail-safe) | C7: `stress`-like load on 4 cores, fan at 1500 vs 4000 rpm, watch the die sensors |
+| Fan: max rpm, and is reg 10's `rpm = 60 x Tach0Count` right with the 0.5 s count window (Count register 0x01)? | **~6700 rpm top; yes** - register 10 tracks the MAX6650's own regulated target within ~4 % (C7) |
+| Safe fan rpm under full CPU load (no MAX6650 fail-safe) | not run yet: `yes > /dev/null` on the 4 cores, fan at 1500 vs 4000 rpm, watch the die sensors |
 | Is MAX6650 GPIO1 (configured as FULL-ON input) wired to an over-temperature signal on the board? | schematic `~/dev/de25_std/Schematic/DE25-Standard.pdf` |
 | Does the ethernet RX stall seen on the Nano happen here? | 20 warm reboots + 20 power cycles with the health check logging |
 | Is rstmgr `BRGMODRST` readable from Linux userspace in HPS-first mode (C2 guard)? | **Yes** (Phase B: 0 in Linux; the guard runs in `fpga_access.py` on the board). It does not show the fabric's own ~100 ms bridge reset after a load (§5.9) |
