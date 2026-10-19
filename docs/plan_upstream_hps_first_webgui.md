@@ -919,6 +919,40 @@ has no manifest).
 
 **[HW] E5. Tests** - see §6 (Phase E rows).
 
+**Phase E progress (2026-10-19):**
+- E1-E3 came with the Phase C port (manifest in `make_jic.sh`, the
+  `fpga_access.py` ops with the `board` check, the API and GUI card).
+  E4: `linux/tools/deploy_fpga.py` ported (host .223, `~/.de25web_token_std`,
+  `build/images`, checks the manifest's and the board's `board`).
+- Row 25: 100 of 100 reloads through `/api/fpga/reload`, 2.14 s mean
+  (2.14-2.33), HEX `a5b6c7`, blinker scanner and fan target written back
+  every time.
+- Row 26: refused (409) before anything was touched: wrong periphery,
+  truncated, corrupt (SHA), `de25-nano` manifest, too big, not a tarball;
+  upload SHA mismatch 400, wrong token 403. Running/installed/previous
+  unchanged.
+- Row 29: a fresh build (1792429546, same periphery `b5d09be0b5b1`)
+  installed by `deploy_fpga.py` in 2.14 s, register 19 matches, card copy
+  SHA-256 = the manifest's; the old core kept as `.prev`.
+- A load that fails after it was accepted (manifest with another build
+  id): 500, the previous core loaded back (`rolled_back`). The `.prev` is
+  used up by that: no previous until the next good install.
+- Row 27: a leftover `.pending` (simulated: `.prev` files, a changed
+  manifest, `fpga_access.py` restarted) - the previous core is the
+  installed one again, `last_load` says so.
+- `gui_test.py --reload-core` passes against the new core.
+- Not run: row 28 (power cut during the card write; the write is `.new`
+  + fsync + rename, and the QSPI fallback for a missing card core was
+  shown in Phase B), row 30 (corrupt core, needs someone at the switch).
+- **Found**: after ~105 reloads in quick succession the MAX6650 stuck in
+  full-on (config readback 0x09 instead of 0x29, fan ~6600 rpm), with
+  either core; fabric reloads re-ran the setup and it still read 0x09; a
+  power cycle cleared it. Not reproduced by a slow-down alone nor by a
+  reload during one. Also: every reload sends the fan to full speed for a
+  few seconds - Terasic's setup writes Config 0x0A (software full-on)
+  before 0x29. Follow-up: GUI warning, setup verify/retry and periodic
+  Config/Alarm Status reads in the fabric, no 0x0A step (§5.17b).
+
 ### Phase F - later
 
 - **RSU** (phase 1 + U-Boot + core updates with SDM fallback). Done and
@@ -1158,6 +1192,14 @@ over-temperature. The 10 s lease in `fpga_access.py` (raise to 4000 rpm)
 and the loop's "no temperature for 5 samples -> fan up" rule are the only
 nets. Do not lower `SAFE_FAN_RPM` below what holds the die at a safe
 temperature under full load (measure in C7).
+
+### 5.17b MAX6650 stuck in full-on (Standard)
+Seen once (Phase E, after ~105 back-to-back core reloads): Config read
+back 0x09 (mode 00 = software full-on) where 0x29 was written; every later
+fabric setup was acknowledged and still read 0x09; only a power cycle
+(the chip stays powered across fabric reloads) cleared it. Safe (the fan
+at full speed), but the loop has no control then. The GUI warns when
+`config_readback` is not 0x29.
 
 ### 5.18 CPU_RESET_n resets the LWH2F bridge side (Standard)
 `axi_bridge_reset <= system_reset`, and `system_reset` follows the

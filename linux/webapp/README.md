@@ -83,10 +83,18 @@ Op `install_core` (`POST /api/fpga`) checks a bundle (core +
 `de25_std.core.json` from `linux/make_jic.sh`: size, SHA-256, board
 `de25-std`, the same periphery hash as the installed core), keeps the old
 core and loads it back if the new one fails, and writes a good one to the
-SD card's FAT partition too. The host tool that makes and sends bundles
-(`deploy_fpga.py`) comes with plan Phase D. The RSU code (`/api/rsu`,
-a core per QSPI image) is there but dormant until plan Phase F gives this
-board an RSU flash layout.
+SD card's FAT partition too. A bad bundle is refused (409) before
+anything is touched. The RSU code (`/api/rsu`, a core per QSPI image) is
+there but dormant until plan Phase F gives this board an RSU flash layout.
+
+```bash
+python3 linux/tools/deploy_fpga.py                  # build/images' core, to 192.168.1.223
+python3 linux/tools/deploy_fpga.py --pack-only core.tar.gz   # a bundle for the GUI's "FPGA core" card
+python3 linux/tools/deploy_fpga.py --reload
+```
+
+A core only fits the first stage in QSPI of a build with the same pins,
+HPS and DDR: after a change there, program the new `.jic` first.
 
 ## Control loop
 
@@ -150,6 +158,7 @@ its own: the lease is the only net when the loop dies.
 | `../board/de25web-supervisor.sh` | runs the three processes on the board and reverts a bad release - installed once, never part of a release |
 | `../tools/install_webapp.py` | one-time install on a running board, over the serial console |
 | `../tools/deploy_web.py` | an update over HTTP: pack, upload, wait, check, confirm |
+| `../tools/deploy_fpga.py` | a new FPGA core over HTTP: bundle (core + manifest), board and periphery check, upload, check the build id |
 | `../tools/supervisor_test.py` | the release cases (good, two updates, no confirmation, crash, restart during the test, rollback onto a broken one, wrong board) against the real supervisor under busybox `sh` with `--sim` |
 | `../tools/gui_test.py` | drives the page in headless Chromium: every blinker, an LED click, the HEX card, the loop, the fan slider, `--reload-core`, screenshots |
 
