@@ -68,11 +68,22 @@ rm -rf "${STAGE}"
 mkdir -p "${STAGE}/boot"
 mformat -i "${FAT}" -F -c 1 -T "${P1_SECTORS}" -h 64 -s 32 -v STDBOOT ::
 mcopy -i "${FAT}" "${LOUT}/u-boot.itb" "${LOUT}/Image" "${LOUT}/${DTB}" ::
+# the SPL's RSU multiboot (build_de25_linux.sh, plan F2) loads the U-Boot of
+# the image the SDM booted: u-boot_<slot>.itb; u-boot.itb stays for SPLs
+# without it
+for slot in P1 FACTORY_IMAGE; do
+    mcopy -i "${FAT}" "${LOUT}/u-boot.itb" "::u-boot_${slot}.itb"
+done
 # an HPS-first build's FPGA core (make_jic.sh): U-Boot's preboot loads it
 # from here before anything touches the fabric
 if [[ -f "${CORE}" ]]; then
     mcopy -i "${FAT}" "${CORE}" ::
-    echo "   + de25_std.core.rbf (HPS-first FPGA core)"
+    # a core per RSU image (plan F3b): U-Boot's preboot loads
+    # de25_std_<image>.core.rbf, without an RSU layout de25_std.core.rbf
+    for slot in P1 FACTORY_IMAGE; do
+        mcopy -i "${FAT}" "${CORE}" "::de25_std_${slot}.core.rbf"
+    done
+    echo "   + de25_std.core.rbf, de25_std_P1/FACTORY_IMAGE.core.rbf (HPS-first FPGA core)"
 fi
 
 echo ">> root partition (Alpine ${ALPINE_VERSION})"
@@ -92,8 +103,14 @@ DE25WEB_TOKEN_FILE="${TOKEN_FILE}" fakeroot -- bash -euo pipefail -c '
         install -D -m 755 "$3/linux/tools/fpga_reload/fpga-reload" "$1/root/usr/sbin/fpga-reload"
         echo "   + /lib/firmware/de25_std.core.rbf (+ .json), de25_std_core_reload.dtbo, /usr/sbin/fpga-reload"
     fi
+    # RSU userspace (build_de25_linux.sh): rsu_client, static, and its config
+    if [ -x "$8/rsu/rsu_client" ]; then
+        install -D -m 755 "$8/rsu/rsu_client" "$1/root/usr/bin/rsu_client"
+        install -D -m 644 "$8/rsu/librsu.rc" "$1/root/etc/librsu.rc"
+        echo "   + /usr/bin/rsu_client, /etc/librsu.rc"
+    fi
     mkfs.ext4 -q -F -L std-root -E offset=$(( $4 * 512 )) -d "$1/root" "$5" "$(( $6 / 2 ))k"
-' _ "${STAGE}" "${TARBALL}" "${TOP}" "${P2_START}" "${IMG}" "${P2_SECTORS}" "${CORE}"
+' _ "${STAGE}" "${TARBALL}" "${TOP}" "${P2_START}" "${IMG}" "${P2_SECTORS}" "${CORE}" "${LOUT}"
 
 mmd   -i "${FAT}" ::extlinux
 mcopy -i "${FAT}" "${STAGE}/boot/extlinux/extlinux.conf" ::extlinux/

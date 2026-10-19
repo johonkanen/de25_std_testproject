@@ -5,7 +5,20 @@
 #
 #   ./build.sh jic      (or linux/make_jic.sh)
 #
-# QSPI layout (16 MB MT25QU128):
+# QSPI layout (16 MB MT25QU128), RSU=1 (the default for HPS-first; plan
+# Phase F, after the DE25-Nano's docs/remote_system_update_plan.md):
+#   0x000000  boot info + decision firmware (to 0x20FFFF)
+#   0x220000  FACTORY_IMAGE: phase 1 (HPS I/O, DDR I/O) + SPL, 1 MB
+#   0x320000  SPT0, SPT1, CPB0, CPB1 (32 KB each): slot and priority tables
+#   0x400000  P1: application image, 1 MB (the same build at first)
+#   0x500000  SSBL.FACTORY_IM, 0x600000 SSBL.P1: each image's u-boot.itb
+#             (the SPL's RSU multiboot loads the one of the image running)
+#   0xA00000  u-boot.itb (UBOOT: for SPLs without RSU multiboot)
+#   0xC00000  CORE.FACTORY_IM, 0xD10000 CORE.P1: each image's FPGA core
+#             behind a 4 KB "core_size=0x..." header (U-Boot's preboot, via
+#             `rsu running_slot`, loads it when the card has none)
+# RSU=0 (the default for FPGA-first, whose ~3 MB bitstream does not fit a
+# 1 MB slot): the plain layout -
 #   0x000000  boot info
 #   0x200000  P1: phase 1 (FPGA-first: the whole bitstream, ~3 MB;
 #             HPS-first: HPS I/O, DDR I/O) + SPL
@@ -21,7 +34,9 @@
 # "HPS FIRST" unless FPGA_FIRST=1 ("AFTER INIT_DONE").
 #
 # Env overrides: BUILD_DIR=, SOF=, SPL=, UBOOT_ITB=, JIC=, CORE_RBF=,
-# QSPI_UBOOT_OFFS=, QSPI_CORE_OFFS= (both must match the U-Boot build).
+# QSPI_UBOOT_OFFS=, QSPI_CORE_OFFS= (both must match the U-Boot build),
+# RSU=0/1, FACTORY_SOF= (another build in the factory slot; default the
+# same .sof as P1).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -136,6 +151,74 @@ PYCORE
         </assignment>"
     echo ">> QSPI core copy at ${QSPI_CORE_OFFS} (header + ${core_size} bytes)"
 fi
+RSU="${RSU:-${HPS_FIRST}}"
+if (( RSU )) && ! (( HPS_FIRST )); then
+    echo "RSU=1 needs an HPS-first .sof (an FPGA-first bitstream does not fit a 1 MB slot)"; exit 1
+fi
+if (( RSU )); then
+    # remote system update layout (plan F1): the SDM boots the
+    # highest-priority application slot that loads (P1), else the factory
+    # image; the SPT/CPB tables say where they are. The decision firmware
+    # makes BOOT_INFO 0x210000 long. Fixed addresses throughout - with
+    # "auto" quartus_pfg 26.1.1 fails (internal error, DE25-Nano). P1 holds
+    # the same build as the factory image until an update writes it.
+    BITSTREAMS="        <bitstream id=\"Factory\">
+            <path hps_path=\"${SPL}\">${FACTORY_SOF:-${SOF}}</path>
+        </bitstream>
+        <bitstream id=\"App1\">
+            <path hps_path=\"${SPL}\">${SOF}</path>
+        </bitstream>"
+    part() { printf '            <partition reserved="%s" fixed_s_addr="1" s_addr="%#010x" e_addr="%#010x" fixed_e_addr="1" id="%s" size="0"/>\n' "$4" "$2" "$3" "$1"; }
+    (( uboot_size <= 0x100000 )) || { echo "u-boot.itb (${uboot_size} bytes) does not fit a 1 MB SSBL slot"; exit 1; }
+    (( 0x1000 + core_size <= 0x110000 )) || { echo "the core (${core_size} bytes) does not fit a CORE slot"; exit 1; }
+    PARTS="$(part BOOT_INFO 0x000000 0x20FFFF 1
+             part FACTORY_IMAGE 0x220000 0x31FFFF 0
+             part SPT0 0x320000 0x327FFF 1
+             part SPT1 0x328000 0x32FFFF 1
+             part CPB0 0x330000 0x337FFF 1
+             part CPB1 0x338000 0x33FFFF 1
+             part P1 0x400000 0x4FFFFF 0
+             part SSBL.FACTORY_IM 0x500000 0x5FFFFF 0
+             part SSBL.P1 0x600000 0x6FFFFF 0
+             part UBOOT $(( QSPI_UBOOT_OFFS )) $(( QSPI_UBOOT_OFFS + 0xFFFFF )) 0
+             part CORE.FACTORY_IM $(( QSPI_CORE_OFFS )) $(( QSPI_CORE_OFFS + 0x10FFFF )) 0
+             part CORE.P1 $(( QSPI_CORE_OFFS + 0x110000 )) $(( QSPI_CORE_OFFS + 0x21FFFF )) 0)"
+    # a core per image (F3b): U-Boot's preboot loads CORE.<image>; the
+    # factory image's sits where U-Boots without `rsu running_slot` look
+    # (QSPI_CORE_OFFS). Both hold this build's.
+    CORE_PART=""
+    CORE_ASSIGN="        <assignment page=\"0\" partition_id=\"CORE.FACTORY_IM\">
+            <raw_file_id>Raw_File_2</raw_file_id>
+        </assignment>
+        <assignment page=\"0\" partition_id=\"CORE.P1\">
+            <raw_file_id>Raw_File_2</raw_file_id>
+        </assignment>"
+    IMAGE_ASSIGN="        <assignment page=\"0\" partition_id=\"FACTORY_IMAGE\">
+            <bitstream_id>Factory</bitstream_id>
+        </assignment>
+        <assignment page=\"1\" partition_id=\"P1\">
+            <bitstream_id>App1</bitstream_id>
+        </assignment>
+        <assignment page=\"0\" partition_id=\"SSBL.FACTORY_IM\">
+            <raw_file_id>Raw_File_1</raw_file_id>
+        </assignment>
+        <assignment page=\"0\" partition_id=\"SSBL.P1\">
+            <raw_file_id>Raw_File_1</raw_file_id>
+        </assignment>"
+    echo ">> RSU layout: factory image 0x220000, P1 0x400000, SPT/CPB 0x320000,"
+    echo "   their U-Boots SSBL.FACTORY_IM 0x500000, SSBL.P1 0x600000,"
+    echo "   their cores CORE.FACTORY_IM ${QSPI_CORE_OFFS}, CORE.P1 $(printf '%#x' $(( QSPI_CORE_OFFS + 0x110000 )))"
+else
+    BITSTREAMS="        <bitstream id=\"Bitstream_1\">
+            <path hps_path=\"${SPL}\">${SOF}</path>
+        </bitstream>"
+    PARTS="            <partition reserved=\"1\" fixed_s_addr=\"1\" s_addr=\"0x00000000\" e_addr=\"0x001FFFFF\" fixed_e_addr=\"1\" id=\"BOOT_INFO\" size=\"0\"/>
+            <partition reserved=\"0\" fixed_s_addr=\"0\" s_addr=\"auto\" e_addr=\"auto\" fixed_e_addr=\"0\" id=\"P1\" size=\"0\"/>
+            <partition reserved=\"0\" fixed_s_addr=\"0\" s_addr=\"${QSPI_UBOOT_OFFS}\" e_addr=\"auto\" fixed_e_addr=\"0\" id=\"UBOOT\" size=\"0\"/>"
+    IMAGE_ASSIGN="        <assignment page=\"0\" partition_id=\"P1\">
+            <bitstream_id>Bitstream_1</bitstream_id>
+        </assignment>"
+fi
 # after Intel's Agilex 5 GSRD (software/yocto_linux/scripts/uboot_only.pfg)
 cat > "${PFG}" << PFGEOF
 <pfg version="1">
@@ -150,9 +233,7 @@ cat > "${PFG}" << PFGEOF
         </output_file>
     </output_files>
     <bitstreams>
-        <bitstream id="Bitstream_1">
-            <path hps_path="${SPL}">${SOF}</path>
-        </bitstream>
+${BITSTREAMS}
     </bitstreams>
     <raw_files>
         <raw_file bitswap="1" type="RBF" id="Raw_File_1">${UBOOT_BIN}</raw_file>
@@ -161,16 +242,12 @@ ${CORE_RAW}
     <flash_devices>
         <flash_loader>${FLASH_LOADER}</flash_loader>
         <flash_device type="${DEVICE}" id="Flash_Device_1">
-            <partition reserved="1" fixed_s_addr="1" s_addr="0x00000000" e_addr="0x001FFFFF" fixed_e_addr="1" id="BOOT_INFO" size="0"/>
-            <partition reserved="0" fixed_s_addr="0" s_addr="auto" e_addr="auto" fixed_e_addr="0" id="P1" size="0"/>
-            <partition reserved="0" fixed_s_addr="0" s_addr="${QSPI_UBOOT_OFFS}" e_addr="auto" fixed_e_addr="0" id="UBOOT" size="0"/>
+${PARTS}
 ${CORE_PART}
         </flash_device>
     </flash_devices>
     <assignments>
-        <assignment page="0" partition_id="P1">
-            <bitstream_id>Bitstream_1</bitstream_id>
-        </assignment>
+${IMAGE_ASSIGN}
         <assignment page="0" partition_id="UBOOT">
             <raw_file_id>Raw_File_1</raw_file_id>
         </assignment>
@@ -179,6 +256,18 @@ ${CORE_ASSIGN}
 </pfg>
 PFGEOF
 quartus_pfg -c "${PFG}"
+if (( RSU )); then
+    # the same image as an RSU application image for an update over the
+    # network (F3): start address 0, bitswapped - librsu relocates it into
+    # the slot (it differs from the P1 copy in the .jic by two pointers and
+    # a block CRC). linux/tools/make_rsu_bundle.py packs it with its U-Boot
+    # and core.
+    APP_RPD="${JIC%.jic}_app.rpd"
+    quartus_pfg -c "${SOF}" "${APP_RPD}" -o hps_path="${SPL}" -o mode=ASX4 \
+        -o start_address=0x00 -o bitswap=ON > "${JIC%.jic}_app.log" 2>&1 || {
+        echo "quartus_pfg failed on the application image, see ${JIC%.jic}_app.log"; exit 1; }
+    echo ">> RSU application image ${APP_RPD} ($(stat -c %s "${APP_RPD}") bytes)"
+fi
 
 echo
 echo "wrote ${JIC} (flash map: ${JIC%.jic}.map)"

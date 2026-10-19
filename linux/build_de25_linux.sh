@@ -48,6 +48,13 @@ QSPI_UBOOT_OFFS="${QSPI_UBOOT_OFFS:-0x00A00000}"
 # it from there when the SD card has none; make_jic.sh uses the same)
 QSPI_CORE_OFFS="${QSPI_CORE_OFFS:-0x00C00000}"
 CORE_NAME="de25_std.core.rbf"
+# RSU userspace (plan F4): librsu + rsu_client, static - the toolchain is
+# glibc, the rootfs Alpine (musl). Pinned as on the DE25-Nano.
+RSU_REPO="https://github.com/altera-fpga/intel-rsu"
+RSU_COMMIT="f6e0f1e15e8e77c0c1150e2df34a13d9a5bd9771"
+ZLIB_VERSION="1.3.1"
+ZLIB_URL="https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz"
+ZLIB_SHA256="9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
 
 # ARM GNU aarch64-linux toolchain (has the LTO plugin ATF's release build
 # needs). CROSS_TOOLCHAIN= a dir with bin/aarch64-none-linux-gnu-gcc skips
@@ -107,6 +114,11 @@ pushd "${SRC}/u-boot-altera" >/dev/null
         drivers/ddr/altera/sdram_agilex5.c
     grep -q 'plat->dualport = 0;  /\* DE25-Standard' drivers/ddr/altera/sdram_agilex5.c || {
         echo "ERROR: the dual-port DDR patch didn't apply - sdram_agilex5.c changed, check by hand"; exit 1; }
+    # `rsu running_slot`: the name of the image the SDM booted and the
+    # offset of its CORE.<name> partition, for the preboot below (plan F3b;
+    # from the DE25-Nano)
+    git apply "${HERE}/patches/u-boot-rsu-running-slot.patch" || {
+        echo "ERROR: patches/u-boot-rsu-running-slot.patch didn't apply - check by hand"; exit 1; }
     # the board: DT, U-Boot dtsi, defconfig
     cp "${HERE}/uboot/${BOARD}.dts" "${HERE}/uboot/${BOARD}-u-boot.dtsi" arch/arm/dts/
     cp "${HERE}/uboot/${BOARD}_defconfig" configs/
@@ -125,13 +137,16 @@ pushd "${SRC}/u-boot-altera" >/dev/null
     # HPS-first images (./build.sh fpga, the default): the SDM leaves the
     # FPGA core unconfigured; load it before anything else. Skipped when the
     # fabric is configured already (FPGA-first image, JTAG .sof, software
-    # reboot): sysmgr FPGA_CONFIG (0x10d120dc) reads 3. From the SD card's
-    # FAT partition, else from the QSPI copy make_jic.sh writes at
-    # QSPI_CORE_OFFS (a 4 KB "core_size=0x..." header for `env import`, the
-    # core right after it). A card core that reads but does not load falls
-    # back to the QSPI copy too.
+    # reboot): sysmgr FPGA_CONFIG (0x10d120dc) reads 3. Each RSU image has
+    # its own core (plan F3b): `rsu running_slot` names the image (P1,
+    # FACTORY_IMAGE) and gives its CORE.<name> partition, so the core is
+    # de25_std_<name>.core.rbf from the SD card's FAT partition, else that
+    # QSPI partition (a 4 KB "core_size=0x..." header for `env import`, the
+    # core right after it - make_jic.sh). Without an RSU layout:
+    # ${CORE_NAME}, else the QSPI copy at QSPI_CORE_OFFS. A card core that
+    # reads but does not load falls back to the QSPI copy too.
     scripts/config --enable CONFIG_USE_PREBOOT
-    scripts/config --set-str CONFIG_PREBOOT "if itest.l *0x10d120dc != 3; then if load mmc 0:1 \${loadaddr} ${CORE_NAME} && fpga load 0 \${loadaddr} \${filesize}; then echo core from SD; else sf probe && sf read \${loadaddr} $(printf '%#x' "${QSPI_CORE_OFFS}") 0x1000 && env import -t \${loadaddr} && sf read \${loadaddr} $(printf '%#x' $(( QSPI_CORE_OFFS + 0x1000 ))) \${core_size} && fpga load 0 \${loadaddr} \${core_size} && echo core from QSPI; fi; fi"
+    scripts/config --set-str CONFIG_PREBOOT "if itest.l *0x10d120dc != 3; then if rsu running_slot rsu_slot && env exists rsu_slot_core; then setenv core_file ${CORE_NAME%.core.rbf}_\${rsu_slot}.core.rbf; setenv core_offs \${rsu_slot_core}; else setenv core_file ${CORE_NAME}; setenv core_offs $(printf '%#x' "${QSPI_CORE_OFFS}"); fi; if load mmc 0:1 \${loadaddr} \${core_file} && fpga load 0 \${loadaddr} \${filesize}; then echo core \${core_file} from SD; else sf probe && sf read \${loadaddr} \${core_offs} 0x1000 && env import -t \${loadaddr} && setexpr core_data \${core_offs} + 0x1000 && sf read \${loadaddr} \${core_data} \${core_size} && fpga load 0 \${loadaddr} \${core_size} && echo core from QSPI \${core_offs}; fi; fi"
     make olddefconfig
     grep -q '^CONFIG_BOOTCOMMAND="bridge enable; run distro_bootcmd"$' .config || {
         echo "ERROR: CONFIG_BOOTCOMMAND not set"; exit 1; }
@@ -144,6 +159,14 @@ pushd "${SRC}/u-boot-altera" >/dev/null
     got="$(sed -n 's/^CONFIG_SYS_SPI_U_BOOT_OFFS=//p' .config)"
     [[ -n "${got}" ]] && (( got == QSPI_UBOOT_OFFS )) || {
         echo "ERROR: CONFIG_SYS_SPI_U_BOOT_OFFS is '${got}', make_jic.sh expects ${QSPI_UBOOT_OFFS}"; exit 1; }
+    # Remote system update (plan F2): the SPL loads the U-Boot of the image
+    # the SDM booted - from the card u-boot_<slot>.itb (u-boot_P1.itb,
+    # u-boot_FACTORY_IMAGE.itb), else from QSPI partition SSBL.<slot>
+    # (SSBL.P1, SSBL.FACTORY_IM). A flash without an RSU layout falls back
+    # to CONFIG_SYS_SPI_U_BOOT_OFFS.
+    scripts/config --enable CONFIG_SOCFPGA_RSU_MULTIBOOT
+    make olddefconfig
+    grep -q '^CONFIG_SOCFPGA_RSU_MULTIBOOT=y$' .config || { echo "ERROR: CONFIG_SOCFPGA_RSU_MULTIBOOT not set"; exit 1; }
     make -j"${JOBS}"
     cp u-boot.itb             "${OUT}/u-boot.itb"
     cp spl/u-boot-spl-dtb.hex "${OUT}/spl/u-boot-spl-dtb.hex"
@@ -160,7 +183,7 @@ pushd "${SRC}/linux-altera" >/dev/null
     #   SENSORS_SOC64            SoC temperatures/voltages (web GUI, fan loop)
     #   FPGA_MGR_STRATIX10_SOC, FPGA_BRIDGE, FPGA_REGION, OF_FPGA_REGION
     #                            FPGA core reload from Linux (fpga-reload)
-    #   INTEL_STRATIX10_RSU      remote system update (later)
+    #   INTEL_STRATIX10_RSU      remote system update (rsu_client, plan Phase F)
     #   RTC_DRV_PCF85363         the board's PCF85263A RTC on I2C1
     for c in SENSORS_SOC64 FPGA_MGR_STRATIX10_SOC FPGA_BRIDGE FPGA_REGION OF_FPGA_REGION \
              INTEL_STRATIX10_RSU RTC_DRV_PCF85363; do
@@ -176,10 +199,47 @@ pushd "${SRC}/linux-altera" >/dev/null
     cp "arch/arm64/boot/dts/intel/${LINUX_DTB}" "${OUT}/${LINUX_DTB}"
 popd >/dev/null
 
+# ---- RSU userspace: librsu + rsu_client (altera-fpga/intel-rsu), static ---
+# rsu_client talks to the kernel's stratix10-rsu driver (sysfs) and writes
+# the QSPI through /dev/mtd1 (librsu.rc). librsu needs zlib (crc32): built
+# static with the same toolchain. One static binary, so it runs on musl.
+ZLIB_TGZ="${BUILD_DIR}/downloads/zlib-${ZLIB_VERSION}.tar.gz"
+mkdir -p "$(dirname "${ZLIB_TGZ}")"
+[[ -f "${ZLIB_TGZ}" ]] || wget -q -O "${ZLIB_TGZ}" "${ZLIB_URL}"
+echo "${ZLIB_SHA256}  ${ZLIB_TGZ}" | sha256sum -c --quiet - || {
+    echo "ERROR: ${ZLIB_TGZ} checksum mismatch"; exit 1; }
+rm -rf "${SRC}/zlib-${ZLIB_VERSION}" && tar xzf "${ZLIB_TGZ}" -C "${SRC}"
+pushd "${SRC}/zlib-${ZLIB_VERSION}" >/dev/null
+    CHOST=aarch64 CC="${CROSS_PREFIX}gcc" AR="${CROSS_PREFIX}ar" RANLIB="${CROSS_PREFIX}ranlib" \
+        ./configure --static --prefix="${OUT}/zlib-aarch64" > /dev/null
+    make -j"${JOBS}" libz.a > /dev/null
+    make install > /dev/null
+popd >/dev/null
+[[ -d "${SRC}/intel-rsu" ]] || git clone -q "${RSU_REPO}" "${SRC}/intel-rsu"
+pushd "${SRC}/intel-rsu" >/dev/null
+    git fetch -q --depth 1 origin "${RSU_COMMIT}" 2>/dev/null || true
+    git checkout -q "${RSU_COMMIT}"
+    mkdir -p "${OUT}/rsu"
+    "${CROSS_PREFIX}gcc" -O2 -Wall -static -Iinclude -Ilib -I"${OUT}/zlib-aarch64/include" \
+        -DLIBRSU_VER=0 lib/*.c example/rsu_client.c \
+        -L"${OUT}/zlib-aarch64/lib" -lz -o "${OUT}/rsu/rsu_client"
+    "${CROSS_PREFIX}strip" "${OUT}/rsu/rsu_client"
+    # librsu's root is the "root" MTD partition starting at SPT0 (/dev/mtd1,
+    # linux/dts/socfpga_agilex5_de25_std.dts); its etc/qspi.rc says /dev/mtd0
+    cat > "${OUT}/rsu/librsu.rc" << 'RCEOF'
+# /etc/librsu.rc - librsu / rsu_client (built by build_de25_linux.sh)
+log med stderr
+root qspi /dev/mtd1
+rsu-dev /sys/devices/platform/stratix10-rsu.0
+RCEOF
+popd >/dev/null
+file "${OUT}/rsu/rsu_client" | grep -q "statically linked" || {
+    echo "ERROR: rsu_client is not static"; exit 1; }
+
 echo
 echo "==================================================================="
 echo "  ${OUT}:"
-echo "    bl31.bin  u-boot.itb  spl/u-boot-spl-dtb.hex  Image  ${LINUX_DTB}"
+echo "    bl31.bin  u-boot.itb  spl/u-boot-spl-dtb.hex  Image  ${LINUX_DTB}  rsu/rsu_client"
 echo
 echo "  next: ./build.sh jic                    # -> build/images/de25_std.jic"
 echo "        linux/tools/make_sdcard_image.sh  # -> build/images/sdcard.img"

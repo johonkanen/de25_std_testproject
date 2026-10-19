@@ -1,0 +1,146 @@
+diff --git a/arch/arm/mach-socfpga/include/mach/rsu_spl.h b/arch/arm/mach-socfpga/include/mach/rsu_spl.h
+index d0d8b664..10034a41 100644
+--- a/arch/arm/mach-socfpga/include/mach/rsu_spl.h
++++ b/arch/arm/mach-socfpga/include/mach/rsu_spl.h
+@@ -10,5 +10,6 @@
+ 
+ u32 rsu_spl_ssbl_address(bool is_qspi_imge_check);
+ u32 rsu_spl_ssbl_size(bool is_qspi_imge_check);
++int rsu_spl_running_slot(char *name, size_t max_size, u32 *core_offset);
+ 
+ #endif /* _RSU_S10_SPL__H_ */
+diff --git a/arch/arm/mach-socfpga/rsu_spl.c b/arch/arm/mach-socfpga/rsu_spl.c
+index a2e56fb3..c62f2839 100644
+--- a/arch/arm/mach-socfpga/rsu_spl.c
++++ b/arch/arm/mach-socfpga/rsu_spl.c
+@@ -21,6 +21,7 @@
+ #include <asm/arch/rsu_spl.h>
+ 
+ #define SSBL_PART_PREFIX	"SSBL."
++#define CORE_PART_PREFIX	"CORE."
+ #define RSU_ADDR_MASK	0xFFFFFFFF
+ #define RSU_ADDR_SHIFT	32
+ #define UBOOT_ENV_EXT ".env"
+@@ -207,6 +208,47 @@ static int get_ssbl_slot(struct socfpga_rsu_s10_spt_slot *rsu_ssbl_slot)
+ 	return -EINVAL;
+ }
+ 
++/*
++ * DE25 boards (HPS-first): the SPT name of the image the SDM booted, and the
++ * offset of its FPGA core partition CORE.<name> (0 if there is none). The
++ * factory image's is CORE.FACTORY_IM - SPT names are 16 characters at
++ * most, as for SSBL.FACTORY_IM.
++ */
++int rsu_spl_running_slot(char *name, size_t max_size, u32 *core_offset)
++{
++	struct socfpga_rsu_s10_spt rsu_spt = {0};
++	int crt_spt_index = -EINVAL;
++	const char *slot, *p;
++	unsigned int nentries;
++	size_t plen = strlen(CORE_PART_PREFIX);
++	int i, ret;
++
++	*core_offset = 0;
++	ret = get_spl_slot(&rsu_spt, sizeof(rsu_spt), &crt_spt_index);
++	if (ret)
++		return ret;
++
++	slot = rsu_spt.spt_slot[crt_spt_index].name;
++	if (strlen(slot) + 1 > max_size)
++		return -ENAMETOOLONG;
++	strcpy(name, slot);
++
++	nentries = rsu_spl_spt_nentries(&rsu_spt);
++	for (i = 0; i < (int)nentries; i++) {
++		p = rsu_spt.spt_slot[i].name;
++		if (strncmp(p, CORE_PART_PREFIX, plen))
++			continue;
++		p += plen;
++		if (!strcmp(p, slot) ||
++		    (!strncmp(slot, FACTORY_IMG_NAME, strlen(FACTORY_IMG_NAME)) &&
++		     !strcmp(p, FACTORY_IMG_NAME))) {
++			*core_offset = rsu_spt.spt_slot[i].offset[0];
++			break;
++		}
++	}
++	return 0;
++}
++
+ int rsu_spl_mmc_filename(char *filename, int max_size)
+ {
+ 	struct socfpga_rsu_s10_spt rsu_spt = {0};
+diff --git a/cmd/socfpga_rsu.c b/cmd/socfpga_rsu.c
+index 47d28bc7..1f02b116 100644
+--- a/cmd/socfpga_rsu.c
++++ b/cmd/socfpga_rsu.c
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include <command.h>
++#include <env.h>
+ #include <limits.h>
+ #include <linux/errno.h>
+ #include <linux/kernel.h>
+@@ -13,6 +14,9 @@
+ #include <rsu_console.h>
+ #include <vsprintf.h>
+ #include <asm/arch/rsu.h>
++#if IS_ENABLED(CONFIG_SOCFPGA_RSU_MULTIBOOT)
++#include <asm/arch/rsu_spl.h>
++#endif
+ 
+ /*
+  * Strictly parse a numeric argv[] value.
+@@ -935,6 +939,34 @@ static int check_running_factory(int argc, char * const argv[])
+ 	return CMD_RET_SUCCESS;
+ }
+ 
++/*
++ * running_slot [var] - DE25: set var (default rsu_slot) to the name
++ * of the image the SDM booted (P1, FACTORY_IMAGE) and var_core to the
++ * offset of its CORE.<name> partition - U-Boot's preboot loads that
++ * image's FPGA core with them (HPS-first).
++ */
++static int running_slot(int argc, char * const argv[])
++{
++#if IS_ENABLED(CONFIG_SOCFPGA_RSU_MULTIBOOT)
++	const char *var = argc > 1 ? argv[1] : "rsu_slot";
++	char name[MAX_PART_NAME_LENGTH + 1];
++	char core_var[64];
++	u32 core = 0;
++
++	if (rsu_spl_running_slot(name, sizeof(name), &core))
++		return CMD_RET_FAILURE;
++	snprintf(core_var, sizeof(core_var), "%s_core", var);
++	env_set(var, name);
++	if (core)
++		env_set_hex(core_var, core);
++	else
++		env_set(core_var, NULL);
++	return CMD_RET_SUCCESS;
++#else
++	return CMD_RET_FAILURE;
++#endif
++}
++
+ struct func_t {
+ 	const char *cmd_string;
+ 	int (*func_ptr)(int cmd_argc, char * const cmd_argv[]);
+@@ -974,7 +1006,8 @@ static const struct func_t rsu_func_t[] = {
+ 	{"create_empty_cpb", create_empty_cpb},
+ 	{"restore_cpb", restore_cpb},
+ 	{"save_cpb", save_cpb},
+-	{"check_running_factory", check_running_factory}
++	{"check_running_factory", check_running_factory},
++	{"running_slot", running_slot}
+ };
+ 
+ int do_rsu(struct cmd_tbl *cmdtp, int flag, int argc, char * const argv[])
+@@ -1044,5 +1077,6 @@ U_BOOT_CMD(rsu, 5, 1, do_rsu,
+ 	   "create_empty_cpb - create an empty CPB\n"
+ 	   "restore_cpb <address> - restore CPB from an address\n"
+ 	   "save_cpb <address> - save CPB to an address\n"
+-	   "check_running_factory - check if currently running the factory image"
++	   "check_running_factory - check if currently running the factory image\n"
++	   "running_slot [var] - set var (rsu_slot) to the running image's name, var_core to its CORE.<name> offset"
+ );

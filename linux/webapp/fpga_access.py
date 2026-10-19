@@ -787,7 +787,9 @@ def check_rsu_bundle(path):
     try:
         manifest = json.loads(files[RSU_MANIFEST])
         if manifest.get("kind") != RSU_KIND:
-            raise CoreError(f"not an RSU bundle: kind {manifest.get('kind')!r}")
+            raise CoreError(f"not an RSU bundle for this board: kind {manifest.get('kind')!r}")
+        if manifest.get("board") != BOARD_NAME:
+            raise CoreError(f"an RSU bundle for {manifest.get('board')!r}, this board is {BOARD_NAME!r}")
         for name in RSU_FILES:
             want = manifest["files"][name]
             got = files.get(name)

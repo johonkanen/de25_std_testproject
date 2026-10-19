@@ -53,6 +53,9 @@ mkdir -p "${ROOT}/etc/de25"
 
 cat > "${ROOT}/etc/rc.local" << EOF
 #!/bin/sh
+# RSU boot confirmation first: it takes over the watchdog U-Boot started
+# (linux/board/rsu-confirm.sh, plan F5)
+[ -x /usr/sbin/rsu-confirm ] && /usr/sbin/rsu-confirm &
 ifconfig lo 127.0.0.1
 ip link set eth0 address \$(cat /etc/de25/mac)
 ifconfig eth0 ${BOARD_IP} netmask 255.255.255.0 up
@@ -78,6 +81,9 @@ echo de25-std > "${ROOT}/etc/hostname"
 # eth0 sometimes passed no traffic after a warm reboot on the DE25-Nano;
 # the watchdog bounces it (linux/board/eth-watchdog.sh)
 install -D -m 755 "${TOOLS}/../board/eth-watchdog.sh" "${ROOT}/usr/sbin/eth-watchdog"
+# RSU boot confirmation (plan F5): an image that does not come up healthy
+# falls back to the factory image (linux/board/rsu-confirm.sh)
+install -D -m 755 "${TOOLS}/../board/rsu-confirm.sh" "${ROOT}/usr/sbin/rsu-confirm"
 
 # /boot (the FAT partition) stays unmounted: only what writes a new FPGA
 # core mounts it, so a power cut cannot leave a dirty FAT behind
@@ -127,6 +133,6 @@ timeout 1
 label alpine
     kernel /Image
     fdt /${DTB}
-    append console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait earlycon panic=-1 kvm-arm.mode=nvhe
+    append console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait earlycon panic=-1 kvm-arm.mode=nvhe watchdog.open_timeout=120
 EOF
 fi

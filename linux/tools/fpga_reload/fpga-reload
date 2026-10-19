@@ -24,8 +24,11 @@ DTBO=$FW/de25_std_core_reload.dtbo
 OVL=/sys/kernel/config/device-tree/overlays/de25_core
 
 if [ $# -ge 1 ]; then
-    cp "$1" "$FW/$CORE.new" && mv "$FW/$CORE.new" "$FW/$CORE"
-    rm -f "$FW/de25_std.core.json"      # it described the core just replaced
+    # with RSU, de25_std.core.rbf links to the running image's core
+    # (fpga_access.py, rsu/<slot>/): replace that file, keep the link
+    T=$(readlink -f "$FW/$CORE" 2>/dev/null || echo "$FW/$CORE")
+    cp "$1" "$T.new" && mv "$T.new" "$T"
+    rm -f "$(dirname "$T")/de25_std.core.json"     # it described the core just replaced
 fi
 [ -f "$FW/$CORE" ] || { echo "fpga-reload: no $FW/$CORE"; exit 1; }
 [ -f "$DTBO" ] || { echo "fpga-reload: no $DTBO"; exit 1; }

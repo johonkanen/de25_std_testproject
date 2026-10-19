@@ -108,9 +108,23 @@
 			#size-cells = <1>;
 			rsu-handle = <&qspi_boot>;
 
+			/*
+			 * The RSU layout (linux/make_jic.sh, plan F4): "u-boot"
+			 * is boot info + the factory image, read-only - nothing
+			 * in Linux can write it; "root" starts at SPT0, as librsu
+			 * wants (/etc/librsu.rc: root qspi /dev/mtd1 - it reads
+			 * "Bad SPT0 magic number" from a partition at 0x0). On a
+			 * plain-layout flash librsu just finds no SPT.
+			 */
 			qspi_boot: partition@0 {
 				label = "u-boot";
-				reg = <0x0 0x01000000>;
+				reg = <0x0 0x00320000>;
+				read-only;
+			};
+
+			qspi_rsu: partition@320000 {
+				label = "root";
+				reg = <0x00320000 0x00ce0000>;
 			};
 		};
 	};
