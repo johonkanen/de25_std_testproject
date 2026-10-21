@@ -17,7 +17,7 @@ Where this is going: [docs/plan_upstream_hps_first_webgui.md](docs/plan_upstream
 | `fpga/hps/` | HPS + DDR4 EMIF Platform Designer system ([fpga/hps/README.md](fpga/hps/README.md)) |
 | `tools/` | `program.sh` (JTAG), `write_githash.sh` |
 | `linux/` | ATF / U-Boot / kernel build, device tree, QSPI image ([linux/README.md](linux/README.md)) |
-| `docs/` | pinout, fan controller, plan |
+| `docs/` | pinout, fan controller, plan, [network updates how-to](docs/agilex5_network_update.md) |
 
 The fabric-only `de25_uart` build, the bare-metal HPS tests, the
 FreeRTOS experiment and the fabric UART register master were removed;

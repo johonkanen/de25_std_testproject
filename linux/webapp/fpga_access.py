@@ -61,7 +61,7 @@ SD card's FAT partition (<boot>), from where U-Boot loads it at power-on.
 
 With an RSU flash layout every image (slot: P1, FACTORY_IMAGE) has its own
 core (the DE25-Nano's docs/remote_system_update_plan.md, R3b; plan Phase F
-here - this board has no RSU layout yet, so none of it is active): this
+here, docs/agilex5_network_update.md): this
 keeps them in <firmware>/rsu/<slot>/ and points
 <firmware>/de25_std.core.rbf (what the reload overlay loads) at the running
 slot's; the card copy is de25_std_<slot>.core.rbf, the one U-Boot's preboot
