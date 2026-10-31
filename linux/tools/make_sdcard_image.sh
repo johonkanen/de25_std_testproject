@@ -56,6 +56,9 @@ RAUC_CA="${RAUC_KEYS:-${HOME}/.de25_rauc_keys}/ca.cert.pem"
 # one each image left the LAN's ARP caches pointing at the old card)
 MAC_FILE="${DE25_MAC_FILE:-${HOME}/.de25_std_mac}"
 BOARD_MAC="$(cat "${MAC_FILE}" 2>/dev/null || true)"
+# who may log in over ssh (as root, key only): these public keys go into the
+# rootfs, so image bundles built here carry them too
+SSH_KEYS="${SSH_AUTHORIZED_KEYS:-$(ls "${HOME}"/.ssh/id_*.pub 2>/dev/null | tr '\n' ' ')}"
 STAGE="${IMAGES}/sdimage"
 SLOTS="FACTORY_IMAGE P1 P2"          # the RSU images (make_jic.sh)
 
@@ -117,7 +120,7 @@ echo ">> rootfs ($(basename "${BASE}")) and data"
 # one fakeroot session: extraction, configuration and mkfs see the same
 # (root) ownership, so the images have root-owned files without real root
 BOARD_IP="${BOARD_IP:-192.168.1.223}" BOARD_GW="${BOARD_GW:-192.168.1.1}" DTB="${DTB}" \
-DE25WEB_TOKEN_FILE="${TOKEN_FILE}" BOARD_MAC="${BOARD_MAC}" fakeroot -- bash -euo pipefail -c '
+DE25WEB_TOKEN_FILE="${TOKEN_FILE}" BOARD_MAC="${BOARD_MAC}" SSH_KEYS="${SSH_KEYS}" fakeroot -- bash -euo pipefail -c '
     S=$1 TOP=$2 LOUT=$3 CORE=$4 RAUC_BIN=$5 RAUC_CA=$6
     mkdir -p "$S/root" "$S/data"
     tar xzf "$7" -C "$S/root" --numeric-owner

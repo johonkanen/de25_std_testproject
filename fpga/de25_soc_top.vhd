@@ -2,7 +2,7 @@
 -- de25_soc_top - DE25-Standard (Agilex 5) SoC bring-up.
 --
 --   * hps_subsystem : Agilex 5 HPS + HPS-EMIF DDR4, EMAC0 (RGMII+MDIO),
---                     SD/MMC, UART1 console, I2C1.  H2F / F2SDRAM / the
+--                     SD/MMC, UART1 console, I2C1, SPIM0 + 3 GPIOs (LCD).  H2F / F2SDRAM / the
 --                     F2H ACE5-Lite port are disabled; the F2H interrupts
 --                     stay enabled but are tied to 0 (unused).
 --   * register_block : the fpga_interconnect register file, reachable
@@ -60,6 +60,13 @@ entity de25_soc_top is
         HPS_SD_DATA      : inout std_logic_vector(3 downto 0);
         HPS_UART_RX      : in    std_logic;
         HPS_UART_TX      : out   std_logic;
+        -- 128x64 LCD module: HPS SPIM0 + three HPS GPIO1 lines
+        HPS_LCM_SPIM_CLK  : out   std_logic;
+        HPS_LCM_SPIM_MOSI : out   std_logic;
+        HPS_LCM_SPIM_SS   : out   std_logic;
+        HPS_LCM_RST_n     : inout std_logic;
+        HPS_LCM_D_C       : inout std_logic;
+        HPS_LCM_BK        : inout std_logic;
 
         -- ---- HPS DDR4 (EMIF) ----
         DDR4_REFCLK_p : in    std_logic;
@@ -220,6 +227,12 @@ architecture rtl of de25_soc_top is
             hps_io_uart1_rx                          : in    std_logic                     := 'X';
             hps_io_i2c1_sda                          : inout std_logic                     := 'X';
             hps_io_i2c1_scl                          : inout std_logic                     := 'X';
+            hps_io_spim0_clk                         : out   std_logic;
+            hps_io_spim0_mosi                        : out   std_logic;
+            hps_io_spim0_ss0_n                       : out   std_logic;
+            hps_io_gpio34                            : inout std_logic                     := 'X';
+            hps_io_gpio35                            : inout std_logic                     := 'X';
+            hps_io_gpio42                            : inout std_logic                     := 'X';
             fpga2hps_interrupt_irq1_irq              : in    std_logic_vector(31 downto 0) := (others => 'X');
             fpga2hps_interrupt_irq0_irq              : in    std_logic_vector(31 downto 0) := (others => 'X');
             ninit_done_ninit_done                    : out   std_logic;
@@ -413,6 +426,13 @@ begin
             hps_io_uart1_rx                           => HPS_UART_RX,
             hps_io_i2c1_sda                           => HPS_I2C_SDA,
             hps_io_i2c1_scl                           => HPS_I2C_SCL,
+            -- LCD (Terasic GHRD: GPIO1 IO10 = RST_n, IO11 = D/C, IO18 = backlight)
+            hps_io_spim0_clk                          => HPS_LCM_SPIM_CLK,
+            hps_io_spim0_mosi                         => HPS_LCM_SPIM_MOSI,
+            hps_io_spim0_ss0_n                        => HPS_LCM_SPIM_SS,
+            hps_io_gpio34                             => HPS_LCM_RST_n,
+            hps_io_gpio35                             => HPS_LCM_D_C,
+            hps_io_gpio42                             => HPS_LCM_BK,
 
             -- F2H interrupts: left enabled (sibling-style) but unused
             fpga2hps_interrupt_irq0_irq                => (others => '0'),

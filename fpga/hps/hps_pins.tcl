@@ -198,3 +198,16 @@ set_location_assignment PIN_AA135 -to HPS_SD_DATA[2]
 set_location_assignment PIN_V127  -to HPS_SD_DATA[3]
 set_location_assignment PIN_AB127 -to HPS_UART_RX
 set_location_assignment PIN_M124  -to HPS_UART_TX
+# 128x64 LCD module (HPS SPIM0 + GPIO1 IO10/11/18), from golden_top.qsf
+set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_BK
+set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_D_C
+set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_RST_n
+set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_SPIM_CLK
+set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_SPIM_MOSI
+set_instance_assignment -name IO_STANDARD "1.8-V" -to HPS_LCM_SPIM_SS
+set_location_assignment PIN_H127  -to HPS_LCM_BK
+set_location_assignment PIN_P124  -to HPS_LCM_D_C
+set_location_assignment PIN_T124  -to HPS_LCM_RST_n
+set_location_assignment PIN_F127  -to HPS_LCM_SPIM_CLK
+set_location_assignment PIN_Y124  -to HPS_LCM_SPIM_MOSI
+set_location_assignment PIN_AB124 -to HPS_LCM_SPIM_SS

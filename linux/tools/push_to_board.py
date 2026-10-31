@@ -2,7 +2,8 @@
 """
 push_to_board.py - push a file to the DE25-Standard's running Linux over
 the network, using the HPS UART1 serial console to drive the remote side
-(the board's rootfs has no scp/ssh, only plain `nc`).
+(written before the rootfs had ssh; now `scp -s FILE root@BOARD:PATH` does
+the same).
 
 Requires the board running Linux with eth0 up, and pyserial.
 

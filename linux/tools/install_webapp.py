@@ -6,7 +6,7 @@ the GUI (make_sdcard_image.sh installs it too). After this, GUI updates go
 over HTTP as signed RAUC bundles: make_bundle.py gui + deploy_bundle.py,
 or the GUI's own "Update" panel.
 
-Driven over the HPS UART1 serial console (the board has no ssh): it
+Driven over the HPS UART1 serial console (written before the board had ssh): it
 
   1. installs python3 (`apk add python3` - the board needs internet),
   2. pushes linux/webapp/ as the first release plus the supervisor

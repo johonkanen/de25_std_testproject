@@ -15,13 +15,35 @@ Vendored verbatim from `datacenter_peak_shaving/fpga/agilex/de25/ip/hps/`
 | file | origin |
 |------|--------|
 | `hps_subsystem.qsys` | vendored, then `iopll_0` removed (see below) |
-| `ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip` | vendored verbatim — HPS pin mux: EMAC0 (RGMII+MDIO), SD/MMC 4-bit, UART1, I2C1 |
+| `ip/hps_subsystem/hps_subsystem_intel_agilex_5_soc_0.ip` | vendored, then the LCD's pins added (see below) — HPS pin mux: EMAC0 (RGMII+MDIO), SD/MMC 4-bit, UART1, I2C1, SPIM0 + GPIO1 IO10/IO11/IO18 (LCD) |
 | `ip/hps_subsystem/hps_subsystem_emif_io96b_hps_0.ip` | vendored verbatim — DDR4 EMIF |
 | `ip/hps_subsystem/hps_subsystem_s10_user_rst_clkgate_0.ip` | vendored verbatim — Reset Release IP (`ninit_done`) |
 | `hps_pins.tcl` | the 100 `HPS_*`/`DDR4_*` pin + IO-standard lines this pin mux actually drives, from `golden_top.qsf` |
 
-No `USB0`/`SPIM0`/LCD-GPIO in this pin mux (unlike the earlier `hps_min.v`
-generator this replaces) — smaller HPS config, smaller pin file.
+No `USB0`, `HPS_LED` or `HPS_KEY` in this pin mux (unlike the earlier
+`hps_min.v` generator this replaces) — smaller HPS config, smaller pin file.
+
+## The LCD's pins (SPIM0 + three GPIOs)
+
+The 128x64 LCD module (Sitronix ST7567) hangs off HPS pins only, as in
+Terasic's GHRD (`Demonstration/SoC_FPGA/GHRD`): SPIM0 `SS0_N`/`CLK`/`MOSI`
+(HPS IO 43-45) and GPIO1 IO10 `RST_n`, IO11 `D_C` (A0), IO18 backlight (HPS
+IO 34, 35, 42; top-level `HPS_LCM_*`, pins in `hps_pins.tcl`). Linux draws
+it from user space: `linux/board/lcd-status.py`.
+
+Added without the Platform Designer GUI (the Generic Component limitation
+above): the six ports were copied, entry for entry, from the GHRD's
+`agilex_hps.ip` and `hps_subsys.qsys` into the four port lists of
+`hps_subsystem_intel_agilex_5_soc_0.ip` (bus interface port maps, model
+ports, the escaped component copy, `altera:port_mapping`) and the two in
+`hps_subsystem.qsys`, and the `.ip`'s `HPS_IO_Enable` (positions 34, 35,
+42-45), `SPIM0_PinMuxing = IO`, `SPIM0_Mode = Single_slave_selects` set to
+the GHRD's values; `hps_subsystem.tcl` got the matching
+`add_instantiation_interface_port` lines. `quartus_ipgenerate` then
+generates the HPS with the IO buffers for them
+(`hps_subsystem_intel_agilex_5_soc_0_intel_sundancemesa_hps_100_*.v`). So
+editing the cached interface lists by hand is the headless way to add HPS
+IO, as long as every copy is edited the same way.
 
 ## Bridges — kept as vendored, same as the sibling projects
 

@@ -1559,10 +1559,16 @@ proc do_create_hps_subsystem {} {
 	add_instantiation_interface_port hps_io hps_io_emac0_rxd3 emac0_rxd3 1 STD_LOGIC Input
 	add_instantiation_interface_port hps_io hps_io_mdio0_mdio mdio0_mdio 1 STD_LOGIC Bidir
 	add_instantiation_interface_port hps_io hps_io_mdio0_mdc mdio0_mdc 1 STD_LOGIC Output
+	add_instantiation_interface_port hps_io hps_io_spim0_clk spim0_clk 1 STD_LOGIC Output
+	add_instantiation_interface_port hps_io hps_io_spim0_mosi spim0_mosi 1 STD_LOGIC Output
+	add_instantiation_interface_port hps_io hps_io_spim0_ss0_n spim0_ss0_n 1 STD_LOGIC Output
 	add_instantiation_interface_port hps_io hps_io_uart1_tx uart1_tx 1 STD_LOGIC Output
 	add_instantiation_interface_port hps_io hps_io_uart1_rx uart1_rx 1 STD_LOGIC Input
 	add_instantiation_interface_port hps_io hps_io_i2c1_sda i2c1_sda 1 STD_LOGIC Bidir
 	add_instantiation_interface_port hps_io hps_io_i2c1_scl i2c1_scl 1 STD_LOGIC Bidir
+	add_instantiation_interface_port hps_io hps_io_gpio34 gpio34 1 STD_LOGIC Bidir
+	add_instantiation_interface_port hps_io hps_io_gpio35 gpio35 1 STD_LOGIC Bidir
+	add_instantiation_interface_port hps_io hps_io_gpio42 gpio42 1 STD_LOGIC Bidir
 	add_instantiation_interface fpga2hps_interrupt_irq1 interrupt OUTPUT
 	set_instantiation_interface_parameter_value fpga2hps_interrupt_irq1 associatedAddressablePoint {}
 	set_instantiation_interface_parameter_value fpga2hps_interrupt_irq1 associatedClock {}

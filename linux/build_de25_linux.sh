@@ -199,14 +199,19 @@ pushd "${SRC}/linux-altera" >/dev/null
     #                            RAUC bundles: squashfs checked by dm-verity
     #                            (docs/plan_rauc.md; SQUASHFS and BLK_DEV_LOOP
     #                            are in the defconfig)
+    #   SPI_DESIGNWARE, SPI_DW_MMIO, SPI_SPIDEV
+    #                            the LCD on SPIM0, drawn from user space
+    #                            (linux/board/lcd-status.py)
     for c in SENSORS_SOC64 FPGA_MGR_STRATIX10_SOC FPGA_BRIDGE FPGA_REGION OF_FPGA_REGION \
-             INTEL_STRATIX10_RSU RTC_DRV_PCF85363 BLK_DEV_DM DM_VERITY CRYPTO_SHA256; do
+             INTEL_STRATIX10_RSU RTC_DRV_PCF85363 BLK_DEV_DM DM_VERITY CRYPTO_SHA256 \
+             SPI_DESIGNWARE SPI_DW_MMIO SPI_SPIDEV; do
         scripts/config --enable "CONFIG_${c}"
     done
     make olddefconfig
     for c in SENSORS_SOC64 FPGA_MGR_STRATIX10_SOC FPGA_BRIDGE FPGA_REGION OF_FPGA_REGION \
              OF_OVERLAY OF_CONFIGFS INTEL_STRATIX10_RSU RTC_DRV_PCF85363 \
-             BLK_DEV_DM DM_VERITY CRYPTO_SHA256 SQUASHFS SQUASHFS_ZLIB BLK_DEV_LOOP; do
+             BLK_DEV_DM DM_VERITY CRYPTO_SHA256 SQUASHFS SQUASHFS_ZLIB BLK_DEV_LOOP \
+             SPI_DESIGNWARE SPI_DW_MMIO SPI_SPIDEV GPIO_CDEV_V1; do
         grep -q "^CONFIG_${c}=y$" .config || { echo "ERROR: CONFIG_${c} not built in"; exit 1; }
     done
     make -j"${JOBS}" Image "intel/${LINUX_DTB}"

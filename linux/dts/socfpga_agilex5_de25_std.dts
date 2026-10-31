@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Terasic DE25-Standard (Agilex 5 A5ED013BB32AE4SCS), for this repo's
- * de25_soc HPS pin mux: EMAC0, SD/MMC, UART1, I2C1, QSPI. No USB0, SPIM0,
- * HPS_LED or HPS_KEY in the pin mux.
+ * de25_soc HPS pin mux: EMAC0, SD/MMC, UART1, I2C1, QSPI, SPIM0 and GPIO1
+ * IO10/IO11/IO18 (the LCD). No USB0, HPS_LED or HPS_KEY in the pin mux.
  *
  * Derived from upstream socfpga_agilex5_de25_nano.dts (linux-socfpga
  * socfpga-6.18.20-lts) and Terasic's socfpga_agilex5_de25s.dts
@@ -54,6 +54,27 @@
 
 &gpio1 {
 	status = "okay";
+};
+
+/*
+ * 128x64 LCD module (Sitronix ST7567) on SPIM0, write-only: SS0, SCLK,
+ * MOSI. Its other lines are GPIO1 (portb) outputs: IO10 RST_n, IO11 A0
+ * (D/C), IO18 backlight. No kernel driver drives it over SPI: lcd-status
+ * (linux/board/lcd-status.py) binds spidev to it and draws the screen.
+ */
+&spi0 {
+	status = "okay";
+	/* no DMA: the kernel has no driver for the DMA controller
+	 * (DW_AXI_DMAC), and with dmas the SPI driver defers forever; the
+	 * LCD's 128-byte writes do not need it */
+	/delete-property/ dmas;
+	/delete-property/ dma-names;
+
+	lcd@0 {
+		compatible = "sitronix,st7567";
+		reg = <0>;
+		spi-max-frequency = <2500000>;
+	};
 };
 
 /* PCF85263A RTC (CR1220 cell holder); ADXL345 at 0x53 not described */
