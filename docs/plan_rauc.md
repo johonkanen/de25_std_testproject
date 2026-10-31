@@ -186,17 +186,40 @@ Done when, on the board (needs someone at the power switch):
 | 1.7 on the board | 2026-10-31, in place over the console (no new card): new kernel on the FAT partition (the FAT has no room for two kernels, so the old one is in `/boot/Image.prev` on the rootfs), RAUC files on the rootfs, one `reboot`: P1 confirmed after 11 s, `rauc status` shows the booted `rootfs.0`. RAUC refused to start until `/var/lib/rauc/gui` and `/core` existed - `make_sdcard_image.sh` now creates them. `./build.sh sdcard` carries all of it |
 | 1 on the board | 2026-10-31, `deploy_bundle.py`: GUI bundle installed and confirmed (12 s); core bundle of the running build: "already running" (3 s); another CA: refused (`unable to get local issuer certificate`); a flipped payload byte: refused (`verity: data block 4 is corrupted`, the install fails); `compatible=de25-nano`: rejected; a GUI release never confirmed: reverted by the supervisor after its 120 s, `rauc install` fails. The GUI never changed on a refusal |
 | 1 cores on the board | 2026-10-31, a new FPGA build (1793422905, same periphery hash; `./build.sh fpga` + `jic` 4 min 31 s): core bundle loaded in 2.15 s, checked, card copy written, the old build kept as previous (6 s in all); GUI + core bundle (GUI `1.0.0+9ac2e21`, core 1792432492 from the old RSU bundle): GUI confirmed first, then the core loaded (12 s); a valid core whose manifest names another build id: loaded, check failed, previous core loaded back, `rauc install` failed, board id still answers. Board left on 1793422905 |
-| 2 | started 2026-10-31: design changed to A/B (P1 + P2) |
+| 2 | done 2026-10-31: A/B (P1 + P2), all of "Done when" shown on the board |
 | 2.1 QSPI | `make_jic.sh` (AB=1): `P2` 0x700000, `SSBL.P2` 0x800000, `CORE.P2` 0xE20000, empty; nothing else moved (checked in the `.map`) |
 | 2.2 U-Boot | `CONFIG_BOOTCOMMAND`: `rsu running_slot` -> `mmc 0:2/3/5`, `/boot/Image` + DT from there, `root=/dev/mmcblk0pN`; FAT `extlinux.conf` (factory rootfs) as the fallback. `scripts/config` puts the string through `sed`: an `&&` in it turned into the old value (`&` = the match) - nested `if`s instead, and the build checks the line |
 | 2.3 card | `make_sdcard_image.sh`: MBR p1 FAT 256 MB, p2/p3/p5 rootfs 768 MB (one `rootfs.ext4` of 512 MB, `resize=true`), p6 data 512 MB; `make_rootfs_base.sh` puts python3 and e2fsprogs(-extra) in at build time (docker, `apk --root --arch aarch64`); board state behind links into `/data` (`/opt/de25web`, `/etc/de25`, `/lib/firmware/rsu`, RAUC's `/data/rauc`) |
 | 2.4 - 2.5 RAUC | `system.conf` (custom backend, `recovery.0` + groups P1/P2), `linux/board/rauc/bootloader` (host test `rauc_backend_test.py` 24/24 against a stand-in `rsu_client`) |
 | 2.6 bundle | `make_bundle.py image`: `rootfs.ext4`, `qspi.tar.gz` (the RSU bundle) with `hooks=install` (`linux/board/rauc/image-hook` -> `fpga_access.py install_rsu` with the slot); `install_rsu` writes P1 or P2, never the running one when both exist (P1 as before without P2); the hook refuses an `fpga_access.py` from before |
 | 2.7 reboot | the handler leaves a marker, the `/api/bundle` runner reboots after `rauc install` exits 0; uploads stream to `/data/upload` (up to 512 MB); `deploy_bundle.py` follows the reboot to the confirmation; `rsu-confirm` also runs `rauc status mark-good` |
+| 2 on the board | 2026-10-31. Move to A/B: the `.jic` over JTAG (65 s, verified), power cycle, the card with `sd_recover.py` (3.2 GB `gzwrite`, CRC checked), power cycle: P1 boots `mmc 0:3`, `/data` mounted, confirmed at 12 s; `rauc status`: booted rootfs.0 (P1), P2 bad (empty), recovery.0 good. Image bundle (46 MB) into P2: rootfs 96 s + resize, QSPI P2 16 s, reboot, P2 (`u-boot_P2.itb`, `mmc 0:5`) confirmed at 12 s, 168 s in all; the next one into P1 the same way back. Confirmation killed on a new P2: watchdog, the SDM loaded **P1** (not factory), P2 recorded failed, RAUC P2 bad; a new install into P2 after that: confirmed, failure record cleared. Power cut at 53 % of the rootfs write into P2: back on P1, confirmed, P2 disabled (RAUC marked it bad first), `/data` clean; the next install into P2 confirmed |
 
 
 Still open in step 1:
 - the old endpoints and tools: retire them, or keep them for old images.
+
+Board findings in step 2 (all fixed):
+- A GUI release installed seconds before the HPS stopped (the JTAG
+  programming) came back with every file 0 bytes after the power cycle,
+  and `current` pointed at it: the GUI looped until `current` was put back
+  by hand, 27 s before the watchdog. `Releases.install` fsyncs the files,
+  their directories and the links now; the supervisor reverts a release
+  with empty files (`supervisor_test.py` case `empty_files`).
+- The handler did not recognise slot images (`[image.rootfs]`, no `/`):
+  the first image install wrote both slots and made P2 primary, then
+  failed in the handler (case `image_marker` now).
+- A warm `reboot` reloads the running image, not the new primary: P2 was
+  primary and the board came back on P1. `set-primary` writes the RSU
+  driver's `reboot_image` now.
+- After a fallback the failed image keeps its priority, so `get-primary`
+  named it; it skips the SDM's failed image now, and `set-primary` clears
+  the failure record when that image is made primary again.
+- An upload cut short by a power cut stayed on `/data` (46 MB): removed
+  when the GUI starts.
+- On the host: a tool's output to a file is buffered, so a wait on that
+  file missed the window for the power cut; the board's own install log
+  (`GET /api/bundle`) is what to wait on.
 
 Board findings:
 - An install that fails while copying (the flipped byte) leaves a

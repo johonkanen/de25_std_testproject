@@ -56,7 +56,8 @@ def say(*a):
 
 
 def carried():
-    """{"gui": name, "core": name} for the artifacts in this bundle"""
+    """{"gui": name, "core": name, "rootfs": "", ...}: the bundle's artifacts
+    (with their names) and slot images"""
     path = os.path.join(os.environ.get("RAUC_BUNDLE_MOUNT_POINT", ""), "manifest.raucm")
     if not os.path.isfile(path):
         raise Failed(f"no bundle manifest ({path})")
@@ -64,9 +65,12 @@ def carried():
     cp.read(path)
     out = {}
     for section in cp.sections():
-        if section.startswith("image.") and "/" in section:
-            repo, name = section[len("image."):].split("/", 1)
-            out[repo] = name
+        if not section.startswith("image."):
+            continue
+        # [image.<repo>/<artifact>] for an artifact, [image.<class>] for a
+        # slot image (rootfs, qspi - step 2)
+        repo, _, name = section[len("image."):].partition("/")
+        out[repo] = name
     return out
 
 

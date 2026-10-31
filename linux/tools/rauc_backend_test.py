@@ -42,6 +42,9 @@ elif a[0] == "--enable":
             s["prio"] += 1
     st["slots"][n]["prio"] = 1
     st["calls"].append(" ".join(a)); save()
+elif a == ["--clear-error-status"]:
+    st["fail"] = 0
+    st["calls"].append(" ".join(a)); save()
 elif a[0] == "--disable":
     st["slots"][int(a[1])]["prio"] = None
     st["calls"].append(" ".join(a)); save()
@@ -67,7 +70,9 @@ def main():
         f.write(FAKE)
     os.chmod(fake, 0o755)
     state = os.path.join(work, "state.json")
-    env = dict(os.environ, RSU_CLIENT=fake, FAKE_RSU_STATE=state)
+    sysfs = os.path.join(work, "sysfs")
+    os.makedirs(sysfs)
+    env = dict(os.environ, RSU_CLIENT=fake, FAKE_RSU_STATE=state, RSU_SYSFS=sysfs)
 
     def run(*args):
         r = subprocess.run([sys.executable, BACKEND, *args], env=env, capture_output=True, text=True)
@@ -100,6 +105,7 @@ def main():
     check("no disable call for an empty slot", calls(), [])
     check("P2 primary", run("set-primary", "P2")[0], 0)
     check("enable call", calls(), ["--enable 3"])
+    check("reboot_image = P2's offset", open(os.path.join(sysfs, "reboot_image")).read(), "0x700000")
     check("primary after", run("get-primary"), (0, "P2", ""))
     check("P1 still good", run("get-state", "P1"), (0, "good", ""))
     # booted into P2, then the next install goes into P1: disabled first
@@ -113,6 +119,11 @@ def main():
     given(p1=2, p2=1, current=0x400000, fail=0x700000)
     check("P2 failed = bad", run("get-state", "P2"), (0, "bad", ""))
     check("P1 good", run("get-state", "P1"), (0, "good", ""))
+    check("primary skips the failed P2", run("get-primary"), (0, "P1", ""))
+    # a new image into P2 after that: made primary, the failure record cleared
+    check("P2 primary again", run("set-primary", "P2")[0], 0)
+    check("enable + clear", calls(), ["--enable 3", "--clear-error-status"])
+    check("P2 primary after the clear", run("get-primary"), (0, "P2", ""))
     # both disabled: the factory image is what boots
     given(p1=None, p2=None, current=0x220000)
     check("primary none", run("get-primary"), (0, "FACTORY_IMAGE", ""))

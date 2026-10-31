@@ -28,6 +28,8 @@ Cases (each from a fresh layout with one confirmed release):
                      "already running"
     deploy_tool      deploy_bundle.py with a GUI + core bundle: confirmed, loaded,
                      exit 0; a bundle from another CA: refused before the upload
+    image_marker     an image bundle's manifest ([image.rootfs], [image.qspi]):
+                     exit 0, the reboot marker left for the runner
     unknown_repo     a bundle for a repository this board lacks -> exit 1
 
 Needs busybox, python3, build/rauc/rauc-host (./build.sh rauc), the keys
@@ -234,6 +236,23 @@ def case_deploy_tool(sup, first):
                          capture_output=True, text=True, timeout=60)
     assert res.returncode != 0 and "unable to get local issuer" in res.stdout + res.stderr, \
         res.stdout + res.stderr
+
+
+def case_image_marker(sup, first):
+    """an image bundle (step 2): RAUC wrote the slots; the handler only asks
+    for the reboot - exit 0 and the marker the /api/bundle runner acts on"""
+    shutil.rmtree(WORK, ignore_errors=True)
+    os.makedirs(MNT)
+    with open(os.path.join(MNT, "manifest.raucm"), "w") as f:
+        f.write("[update]\ncompatible=de25-std\n\n[hooks]\nfilename=hook\n\n"
+                "[image.rootfs]\nfilename=rootfs.ext4\n\n[image.qspi]\nfilename=qspi.tar.gz\nhooks=install;\n")
+    marker = os.path.join(st.RUN, "bundle", "reboot")
+    if os.path.exists(marker):
+        os.remove(marker)
+    res = run_handler()
+    assert res.returncode == 0 and "reboots into it" in res.stdout, res.stdout + res.stderr
+    assert os.path.exists(marker), "no reboot marker"
+    assert st.version()["pending"] is None, "an image bundle must not start a GUI test"
 
 
 def case_unknown_repo(sup, first):

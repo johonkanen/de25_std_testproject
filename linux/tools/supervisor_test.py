@@ -16,6 +16,9 @@ Cases (each starts from a fresh layout with one confirmed release):
     restart          the board restarts during the test: reverted at start-up
     rollback_broken  roll back onto a broken release: that reverts too
     wrong_board      a release for another board (or none): refused, 400
+    empty_files      a confirmed release whose files came back empty (a power
+                     cut before they reached the card): back to the previous
+                     one when the supervisor starts
 
 Needs busybox and python3. The layout and sockets go to /tmp/d25s (short:
 Unix socket paths, plan §5.20).
@@ -239,12 +242,26 @@ def case_wrong_board(sup, first):
     assert v["release"] == first and v["pending"] is None, v
 
 
+def case_empty_files(sup, first):
+    rel = upload(release())["installed"]
+    confirm(rel)
+    sup.kill()                                  # the power goes ...
+    d = os.path.join(BASE, "releases", rel)
+    for root, _, files in os.walk(d):           # ... before the files reached the card
+        for f in files:
+            open(os.path.join(root, f), "w").close()
+    sup.start()
+    wait_log("has missing or empty files", 20)
+    v = wait_for("back on the first release", lambda v: v.get("release") == first, 30)
+    assert v["current"] == first and v["pending"] is None, v
+
+
 CASES = [n[5:] for n in dir() if n.startswith("case_")]
 
 
 def main():
     names = sys.argv[1:] or ["good", "two_updates", "two_unconfirmed", "no_confirm", "crash",
-                             "restart", "rollback_broken", "wrong_board"]
+                             "restart", "rollback_broken", "wrong_board", "empty_files"]
     bad = set(names) - set(CASES)
     if bad:
         sys.exit(f"unknown case(s) {', '.join(sorted(bad))}; known: {', '.join(CASES)}")

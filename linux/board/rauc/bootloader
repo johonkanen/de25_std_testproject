@@ -8,9 +8,18 @@ The SDM boots the highest-priority application image that is enabled and
 has not failed (priority 1 is the highest), else the factory image. A
 bootname is the image's SPT name: P1, P2, FACTORY_IMAGE.
 
-    get-primary            the enabled one of P1/P2 with the best priority,
-                           else FACTORY_IMAGE
-    set-primary P1|P2      rsu_client --enable: that image to the top
+    get-primary            what the SDM boots: the enabled one of P1/P2 with
+                           the best priority that is not the failed image
+                           (it keeps its priority after a failure - the SDM
+                           skips it), else FACTORY_IMAGE
+    set-primary P1|P2      rsu_client --enable: that image to the top, and its
+                           offset into the RSU driver's reboot_image: a warm
+                           reboot reloads the running image otherwise (seen
+                           2026-10-31: P2 primary, `reboot` came back on P1);
+                           a power cycle goes by priority anyway. If it is the
+                           image the SDM last recorded as failed (an install
+                           after a fallback), that record is cleared
+                           (--clear-error-status): it is a new image now
     get-state NAME         bad: disabled/erased, or the image the SDM last
                            recorded as failed; good otherwise (the factory
                            image is always good)
@@ -23,7 +32,8 @@ bootname is the image's SPT name: P1, P2, FACTORY_IMAGE.
     get-current            the image the SDM booted (rsu_client --log)
 
 Exit 0 on success, non-zero with the reason on stderr otherwise.
-RSU_CLIENT overrides the rsu_client binary (tests).
+RSU_CLIENT overrides the rsu_client binary, RSU_SYSFS the driver's sysfs
+directory (tests).
 """
 import os
 import re
@@ -31,6 +41,7 @@ import subprocess
 import sys
 
 RSU_CLIENT = os.environ.get("RSU_CLIENT", "rsu_client")
+RSU_SYSFS = os.environ.get("RSU_SYSFS", "/sys/devices/platform/stratix10-rsu.0")
 APP_IMAGES = ("P1", "P2")
 FACTORY = "FACTORY_IMAGE"
 
@@ -89,11 +100,21 @@ def main(argv):
         raise Error("usage: bootloader get-primary|set-primary|get-state|set-state|get-current")
     cmd, args = argv[0], argv[1:]
     if cmd == "get-primary":
-        enabled = [(p, n) for n, (_, _, p) in images().items() if p is not None]
+        _, fail = log()
+        enabled = [(p, n) for n, (_, off, p) in images().items() if p is not None and off != fail]
         print(min(enabled)[1] if enabled else FACTORY)
     elif cmd == "set-primary" and len(args) == 1:
         need_app(args[0])
-        rsu("--enable", images()[args[0]][0])
+        num, offset, _ = images()[args[0]]
+        rsu("--enable", num)
+        _, fail = log()
+        if fail and fail == offset:
+            rsu("--clear-error-status")
+        try:
+            with open(os.path.join(RSU_SYSFS, "reboot_image"), "w") as f:
+                f.write(hex(offset))
+        except OSError as e:
+            raise Error(f"reboot_image: {e}") from None
     elif cmd == "get-state" and len(args) == 1:
         if args[0] == FACTORY:
             print("good")

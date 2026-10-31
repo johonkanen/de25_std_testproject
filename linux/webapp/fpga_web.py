@@ -332,6 +332,15 @@ class Board:
             return self._seq, self._state
 
 
+def fsync_dir(path):
+    """a directory's entries (renames, new links) to the disk"""
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 # --------------------------------------------------------------------------
 # GUI releases: install, test, confirm, roll back
 # --------------------------------------------------------------------------
@@ -402,8 +411,19 @@ class Releases:
                     os.makedirs(os.path.dirname(target), exist_ok=True)
                     with open(target, "wb") as f:
                         f.write(tar.extractfile(m).read())
+                        f.flush()
+                        os.fsync(f.fileno())
+        # Durable before anything points at it: on 2026-10-31 a release
+        # installed seconds before the board stopped (JTAG programming, then
+        # a power cycle) came back with every file 0 bytes after ext4's
+        # journal recovery, and "current" pointed at it - a confirmed release
+        # that never ran. Files fsync'd above, their directories here.
+        for root, dirs, _ in os.walk(tmp):
+            for d in dirs + ["."]:
+                fsync_dir(os.path.join(root, d))
         shutil.rmtree(dest, ignore_errors=True)
         os.rename(tmp, dest)
+        fsync_dir(os.path.join(self.base, "releases"))
         # switch: previous <- current, current <- new, pending marks the test.
         # A current still on test was never confirmed: previous stays the
         # last confirmed release, the one a failed test should go back to
@@ -414,6 +434,9 @@ class Releases:
         self._symlink("current", rel)
         with open(os.path.join(self.base, "pending"), "w") as f:
             f.write(rel + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        fsync_dir(self.base)
         self._prune(keep={rel, cur, self._link("previous")})
         return rel
 
@@ -424,6 +447,7 @@ class Releases:
         if open(pending).read().strip() != running_release:
             raise ValueError("the release on test is not the one running")
         os.remove(pending)
+        fsync_dir(self.base)
         return True
 
     def rollback(self):
@@ -444,6 +468,7 @@ class Releases:
             os.remove(tmp)
         os.symlink(os.path.join("releases", rel), tmp)
         os.replace(tmp, os.path.join(self.base, name))         # atomic
+        fsync_dir(self.base)
 
     def _prune(self, keep, max_releases=4):
         d = os.path.join(self.base, "releases")
@@ -480,6 +505,14 @@ class Bundles:
         self.upload_dir = os.environ.get("DE25WEB_UPLOAD_DIR") or (
             "/data/upload" if os.path.ismount("/data") else self.dir)
         self.lock = threading.Lock()
+        # an upload left by an install the power cut short (seen 2026-10-31,
+        # 46 MB on /data): nothing will use it - unless an install still runs
+        stale = os.path.join(self.upload_dir, "upload.raucb")
+        if os.path.exists(stale) and not self.running():
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
 
     @property
     def available(self):

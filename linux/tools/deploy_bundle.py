@@ -192,7 +192,12 @@ def follow_reboot(base, before, t0, wait):
             return 0
         if rsu.get("slot") == was or rsu.get("slot") == "FACTORY_IMAGE":
             if (rsu.get("confirm") or "").startswith(("confirmed", "factory")):
-                sys.exit(f">> the new image did not come up healthy: the SDM fell back to {rsu.get('slot')}")
+                fail = st.get("fail_image") or "0"
+                if int(fail, 16) == 0:
+                    sys.exit(f">> the board came back on {rsu.get('slot')} with no failure recorded: the reboot "
+                             "did not switch images (the new one stays primary for the next power-on)")
+                sys.exit(f">> the new image did not come up healthy: the SDM fell back to {rsu.get('slot')} "
+                         f"(failed image {fail})")
     sys.exit(f"no confirmation within {max(wait, 600):.0f} s; last: {last or 'no answer'}")
 
 

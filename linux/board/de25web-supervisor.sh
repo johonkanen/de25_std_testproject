@@ -69,6 +69,7 @@ revert() {
     ln -sfn "${prev}" current
     ln -sfn "releases/${bad}" previous
     rm -f pending
+    sync
     log "reverted ${bad} -> $(current): $1"
 }
 
@@ -147,8 +148,19 @@ fi
 test_rel=""
 test_t0=0
 fails=0
+empty_reverted=""
 while :; do
     rel="$(current)"
+    # A release whose files came back empty (written, then the power went
+    # before they reached the card - 2026-10-31: every file 0 bytes after
+    # ext4's journal recovery) can never run, and a confirmed one would loop
+    # here forever. Back to "previous" - once per run, so two broken
+    # releases cannot swap back and forth.
+    if [ -z "${empty_reverted}" ] && { [ ! -s "${BASE}/current/fpga_web.py" ] || [ ! -s "${BASE}/current/VERSION" ]; }; then
+        empty_reverted=1
+        revert "${rel} has missing or empty files (lost in a power cut?)"
+        rel="$(current)"
+    fi
     if on_test "${rel}"; then
         if [ "${test_rel}" != "${rel}" ]; then
             test_rel="${rel}"; test_t0="$(uptime_s)"; fails=0
