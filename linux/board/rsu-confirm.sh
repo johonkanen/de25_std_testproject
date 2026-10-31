@@ -64,6 +64,10 @@ done
 echo "confirmed $image $(uptime_s)" > "$STATE"
 log "image $image healthy after $(uptime_s) s - confirmed"
 rsu_client --reset-retry-counter > /dev/null 2>&1
+# RAUC (docs/plan_rauc.md step 2): the booted slot group is good. Its boot
+# backend has nothing to write for "good" - this keeps RAUC's own status
+# (rauc status) in step with the SDM's.
+command -v rauc > /dev/null && rauc status mark-good > /dev/null 2>&1 &
 while :; do
     printf . >&3
     sleep "$PET"

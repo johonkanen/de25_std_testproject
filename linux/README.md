@@ -24,9 +24,12 @@ Neither upstream tree has a DE25-Standard, so this directory carries them.
 | `tools/make_sdcard_image.sh`, `tools/alpine_rootfs_config.sh` | the SD card image, without root (`./build.sh sdcard`) |
 | `tools/sd_recover.py`, `tools/tftp_server.py` | write the card from U-Boot over TFTP |
 | `build_rauc.sh` | RAUC 1.15.2, static, for the board and for this PC (`./build.sh rauc`, docker; [plan](../docs/plan_rauc.md)) |
-| `board/rauc/system.conf`, `board/rauc/post-install` | the board's RAUC config (artifact repositories `gui`, `core`) and the handler that gives each artifact to the GUI supervisor or `fpga_access.py` |
+| `board/rauc/system.conf`, `board/rauc/post-install` | the board's RAUC config (A/B slot groups P1/P2 + the factory rootfs read-only; artifact repositories `gui`, `core`) and the handler that gives each artifact to the GUI supervisor or `fpga_access.py`, and asks for the reboot after an image |
+| `board/rauc/bootloader`, `board/rauc/image-hook` | RAUC's boot backend on `rsu_client` (primary/good/bad = RSU slot priorities), and an image bundle's install hook (the QSPI image through `fpga_access.py`) |
+| `tools/make_rootfs_base.sh` | the rootfs base: Alpine minirootfs + python3, e2fsprogs, installed at build time (docker) |
 | `tools/rauc_keys.sh` | the development CA and signing key, once, in `~/.de25_rauc_keys` (never in the repo) |
 | `tools/make_bundle.py`, `tools/deploy_bundle.py` | a signed RAUC bundle (`gui`, `core` or both), and its install over HTTP (`POST /api/bundle`) |
+| `tools/rauc_backend_test.py` | the boot backend against a stand-in `rsu_client` |
 | `tools/rauc_handler_test.py` | `/api/bundle` and the handler against the real supervisor with `--sim` (a stand-in for `rauc install` itself) |
 | `tools/push_to_board.py` | push a file to the running board (`nc`, driven over the console) |
 | `board/eth-watchdog.sh` | bounces eth0 when it passes no traffic (from the DE25-Nano) |

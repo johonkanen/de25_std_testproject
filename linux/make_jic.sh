@@ -17,6 +17,10 @@
 #   0xC00000  CORE.FACTORY_IM, 0xD10000 CORE.P1: each image's FPGA core
 #             behind a 4 KB "core_size=0x..." header (U-Boot's preboot, via
 #             `rsu running_slot`, loads it when the card has none)
+#   0x700000  P2, 0x800000 SSBL.P2, 0xE20000 CORE.P2: the second application
+#             image (docs/plan_rauc.md step 2, A/B with RAUC), empty: the
+#             first image update over the network fills it. AB=0 leaves
+#             them out (the layout before step 2)
 # RSU=0 (the default for FPGA-first, whose ~3 MB bitstream does not fit a
 # 1 MB slot): the plain layout -
 #   0x000000  boot info
@@ -35,7 +39,7 @@
 #
 # Env overrides: BUILD_DIR=, SOF=, SPL=, UBOOT_ITB=, JIC=, CORE_RBF=,
 # QSPI_UBOOT_OFFS=, QSPI_CORE_OFFS= (both must match the U-Boot build),
-# RSU=0/1, FACTORY_SOF= (another build in the factory slot; default the
+# RSU=0/1, AB=0/1 (P2: default 1), FACTORY_SOF= (another build in the factory slot; default the
 # same .sof as P1).
 set -euo pipefail
 
@@ -152,6 +156,7 @@ PYCORE
     echo ">> QSPI core copy at ${QSPI_CORE_OFFS} (header + ${core_size} bytes)"
 fi
 RSU="${RSU:-${HPS_FIRST}}"
+AB="${AB:-1}"
 if (( RSU )) && ! (( HPS_FIRST )); then
     echo "RSU=1 needs an HPS-first .sof (an FPGA-first bitstream does not fit a 1 MB slot)"; exit 1
 fi
@@ -183,6 +188,15 @@ if (( RSU )); then
              part UBOOT $(( QSPI_UBOOT_OFFS )) $(( QSPI_UBOOT_OFFS + 0xFFFFF )) 0
              part CORE.FACTORY_IM $(( QSPI_CORE_OFFS )) $(( QSPI_CORE_OFFS + 0x10FFFF )) 0
              part CORE.P1 $(( QSPI_CORE_OFFS + 0x110000 )) $(( QSPI_CORE_OFFS + 0x21FFFF )) 0)"
+    if (( AB )); then
+        # P2 and its U-Boot and core: in the free space, nothing above moves.
+        # No assignment - empty until an update writes them.
+        (( QSPI_CORE_OFFS + 0x32FFFF < 0x1000000 )) || { echo "CORE.P2 does not fit the 16 MB"; exit 1; }
+        PARTS="${PARTS}
+$(part P2 0x700000 0x7FFFFF 0
+  part SSBL.P2 0x800000 0x8FFFFF 0
+  part CORE.P2 $(( QSPI_CORE_OFFS + 0x220000 )) $(( QSPI_CORE_OFFS + 0x32FFFF )) 0)"
+    fi
     # a core per image (F3b): U-Boot's preboot loads CORE.<image>; the
     # factory image's sits where U-Boots without `rsu running_slot` look
     # (QSPI_CORE_OFFS). Both hold this build's.
@@ -208,6 +222,7 @@ if (( RSU )); then
     echo ">> RSU layout: factory image 0x220000, P1 0x400000, SPT/CPB 0x320000,"
     echo "   their U-Boots SSBL.FACTORY_IM 0x500000, SSBL.P1 0x600000,"
     echo "   their cores CORE.FACTORY_IM ${QSPI_CORE_OFFS}, CORE.P1 $(printf '%#x' $(( QSPI_CORE_OFFS + 0x110000 )))"
+    (( AB )) && echo "   P2 0x700000, SSBL.P2 0x800000, CORE.P2 $(printf '%#x' $(( QSPI_CORE_OFFS + 0x220000 ))) - empty (AB=1)"
 else
     BITSTREAMS="        <bitstream id=\"Bitstream_1\">
             <path hps_path=\"${SPL}\">${SOF}</path>

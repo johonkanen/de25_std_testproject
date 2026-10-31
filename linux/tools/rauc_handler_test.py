@@ -237,9 +237,9 @@ def case_deploy_tool(sup, first):
 
 
 def case_unknown_repo(sup, first):
-    stage(bundle(["gui"]), extra_section="[image.rootfs/x]\nfilename=x.img")
+    stage(bundle(["gui"]), extra_section="[image.nothere/x]\nfilename=x.img")
     res = run_handler()
-    assert res.returncode == 1 and "unknown artifact repository 'rootfs'" in res.stdout, \
+    assert res.returncode == 1 and "unknown artifact repository 'nothere'" in res.stdout, \
         res.stdout + res.stderr
     assert st.version()["pending"] is None, "a refused bundle must not start a GUI test"
 

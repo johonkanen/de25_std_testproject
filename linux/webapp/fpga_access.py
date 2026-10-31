@@ -26,8 +26,10 @@ Protocol: <run>/fpga.sock, one JSON object per line each way.
     {"op": "install_core", "bundle": PATH, "force": false}
                                                 check, install and load a new core (below)
     {"op": "rsu"}                               remote system update: images, status, confirmation
-    {"op": "install_rsu", "bundle": PATH, "reboot": true}
-                                                write an RSU bundle to P1, then reboot into it
+    {"op": "install_rsu", "bundle": PATH, "reboot": true, "slot": "P2"}
+                                                write an RSU bundle into an application slot
+                                                (default: the one not running; P1 without
+                                                the A/B layout), then reboot into it
     {"op": "sim", "ambient": 15.0, "load": 1.0} the simulated plant (--sim only);
                                                 "fan_stuck": 1 the MAX6650 out of closed loop
 Errors: {"ok": false, "error": "..."}; while paused every read/write answers
@@ -68,12 +70,17 @@ slot's; the card copy is de25_std_<slot>.core.rbf, the one U-Boot's preboot
 loads for that image.
 
 install_rsu writes a whole new image (linux/tools/make_rsu_bundle.py: the
-application image, its U-Boot and its core) to slot P1 with rsu_client, and
-reboots into it; rsu-confirm (the DE25-Nano's linux/board/rsu-confirm.sh)
-confirms it or the watchdog falls back to the factory image (its
-docs/remote_system_update_plan.md, R5/R6). The order keeps a power cut harmless: P1 erased first (the factory
-image boots meanwhile), then its U-Boot and core (QSPI SSBL.P1 / CORE.P1,
-the card, /lib/firmware/rsu/P1), the image itself last.
+application image, its U-Boot and its core) into an application slot with
+rsu_client, and reboots into it; rsu-confirm (the DE25-Nano's
+linux/board/rsu-confirm.sh) confirms it or the watchdog falls back (its
+docs/remote_system_update_plan.md, R5/R6). With the A/B layout
+(docs/plan_rauc.md step 2: P1 and P2) the slot is the one not running -
+never the running one - and a RAUC image bundle's install hook calls this
+with the slot RAUC chose and no reboot; without P2 it is P1 (the factory
+image is the fallback). The order keeps a power cut harmless: the slot
+erased first (another image boots meanwhile), then its U-Boot and core
+(QSPI SSBL.<slot> / CORE.<slot>, the card, /lib/firmware/rsu/<slot>), the
+image itself last.
 
 Fan (MAX6650, register 9): the register holds the MAX6650's KTACH target, a
 speed - rpm_to_ktach()/ktach_to_rpm() below are the one conversion every
@@ -217,7 +224,8 @@ MTD_SYSFS = "/sys/class/mtd"
 SPT_MAGIC = 0x57713427
 SPT_ENTRY = struct.Struct("<16sIIII")      # name, offset lo/hi, length, flags
 CORE_HEADER = 0x1000                        # "core_size=0x...\n", the core after it
-RSU_SLOT = "P1"                             # the one application slot an update writes
+RSU_SLOT = "P1"                             # the slot an RSU update writes by default
+RSU_APP_SLOTS = ("P1", "P2")                # application images (P2: A/B, docs/plan_rauc.md)
 RSU_KIND = "de25_std_rsu"
 RSU_FILES = ("app.rpd", "u-boot.itb", CORE_NAME, MANIFEST_NAME)
 RSU_MANIFEST = "rsu.json"
@@ -875,7 +883,7 @@ class Access:
         self.loading = False
         self.last_load = None
         self.last_rsu = None
-        self._p1_slot = None                 # librsu's slot number of P1, looked up once
+        self._app_slots = None               # librsu's slot numbers of P1 (P2), looked up once
         self._recover_install()
         self.lock = threading.Lock()
         self.paused_until = 0.0
@@ -957,7 +965,8 @@ class Access:
             if not self.core_lock.acquire(blocking=False):
                 return {"ok": False, "error": "a core load or RSU update is already running"}
             try:
-                return self.install_rsu(str(req["bundle"]), bool(req.get("reboot", True)))
+                return self.install_rsu(str(req["bundle"]), bool(req.get("reboot", True)),
+                                        req.get("slot"))
             finally:
                 self.core_lock.release()
         if op in ("reload", "install_core"):
@@ -1153,32 +1162,55 @@ class Access:
                 out["installed"] = json.load(f)
         except (OSError, ValueError):
             out["installed"] = None
-        # whether P1 holds a bootable image now: rsu.json says what was last
-        # written, but an update cut short leaves P1 erased ("[disabled]")
+        # whether each application image holds a bootable image now:
+        # rsu.json says what was last written there, but an update cut short
+        # leaves the slot erased ("[disabled]"). P2 only with the A/B layout.
+        out["images"] = {}
         try:
-            if self._p1_slot is None:
-                self._p1_slot = rsu_slots()[RSU_SLOT][0]
-            ok, listing = rsu_client("--list", self._p1_slot, timeout=30)
-            prio = re.search(r"PRIORITY:\s*(\S+)", listing) if ok else None
-            out["p1_priority"] = prio.group(1) if prio else None
-        except (CoreError, KeyError):
-            out["p1_priority"] = None
+            if self._app_slots is None:
+                found = rsu_slots()
+                self._app_slots = {n: found[n][0] for n in RSU_APP_SLOTS if n in found}
+            for name, num in self._app_slots.items():
+                ok, listing = rsu_client("--list", num, timeout=30)
+                prio = re.search(r"PRIORITY:\s*(\S+)", listing) if ok else None
+                try:
+                    with open(os.path.join(os.path.dirname(self.firmware), name, RSU_MANIFEST)) as f:
+                        inst = json.load(f)
+                except (OSError, ValueError):
+                    inst = None
+                out["images"][name] = {"priority": prio.group(1) if prio else None,
+                                       "build_id": inst.get("build_id") if inst else None,
+                                       "running": name == self.slot}
+        except CoreError:
+            pass
+        out["p1_priority"] = out["images"].get(RSU_SLOT, {}).get("priority")
         return out
 
-    def install_rsu(self, bundle, reboot=True):
-        """the bundle into slot P1 - see the module docstring for the order"""
+    def install_rsu(self, bundle, reboot=True, slot=None):
+        """the bundle into an application slot - see the module docstring
+        for the order. With the A/B layout (P1 and P2 in the flash) never the
+        running one, and by default the other one; without P2, P1 (also
+        while it runs: the factory image is the fallback)."""
         t0 = time.time()
         try:
-            files, manifest = check_rsu_bundle(bundle)
             slots = rsu_slots()
-            parts = {n: slots.get(n) for n in (RSU_SLOT, "SSBL." + RSU_SLOT, "CORE." + RSU_SLOT)}
+            apps = [n for n in RSU_APP_SLOTS if n in slots]
+            if slot is None:
+                others = [n for n in apps if n != self.slot]
+                slot = others[0] if len(apps) > 1 and others else RSU_SLOT
+            if slot not in apps:
+                raise CoreError(f"{slot!r} is not an application slot here ({', '.join(apps) or 'none'})")
+            if slot == self.slot and len(apps) > 1:
+                raise CoreError(f"{slot} is the image running - an update writes the other one")
+            files, manifest = check_rsu_bundle(bundle)
+            parts = {n: slots.get(n) for n in (slot, "SSBL." + slot, "CORE." + slot)}
             missing = [n for n, v in parts.items() if v is None]
             if missing:
                 raise CoreError("the flash has no " + ", ".join(missing) + " (make_jic.sh RSU layout)")
             core = files[CORE_NAME]
             core_raw = ("core_size=%#x\n" % len(core)).encode().ljust(CORE_HEADER, b"\0") + core
-            for name, data in ((RSU_SLOT, files["app.rpd"]), ("SSBL." + RSU_SLOT, files["u-boot.itb"]),
-                               ("CORE." + RSU_SLOT, core_raw)):
+            for name, data in ((slot, files["app.rpd"]), ("SSBL." + slot, files["u-boot.itb"]),
+                               ("CORE." + slot, core_raw)):
                 if len(data) > parts[name][2]:
                     raise CoreError(f"{name} is {parts[name][2]:#x} bytes, the update needs {len(data):#x}")
         except CoreError as e:
@@ -1198,48 +1230,48 @@ class Access:
             for name, data in (("app.rpd", files["app.rpd"]), ("u-boot.itb", files["u-boot.itb"]),
                                ("core.bin", core_raw)):
                 write_file(os.path.join(staging, name), data)
-            p1, ssbl, corep = (parts[n][0] for n in (RSU_SLOT, "SSBL." + RSU_SLOT, "CORE." + RSU_SLOT))
-            log(f"RSU update to build {manifest['build_id']}: {RSU_SLOT} erased first - "
-                "a power cut from here on boots the factory image")
-            run("erase P1", "--erase", p1)
-            run("erase SSBL.P1", "--erase", ssbl)
-            run("write SSBL.P1", "--add-raw", os.path.join(staging, "u-boot.itb"), "--slot", ssbl)
-            run("erase CORE.P1", "--erase", corep)
-            run("write CORE.P1", "--add-raw", os.path.join(staging, "core.bin"), "--slot", corep)
-            boot = self._write_boot_files({f"u-boot_{RSU_SLOT}.itb": files["u-boot.itb"],
-                                           f"de25_std_{RSU_SLOT}.core.rbf": core})
+            p1, ssbl, corep = (parts[n][0] for n in (slot, "SSBL." + slot, "CORE." + slot))
+            log(f"RSU update to build {manifest['build_id']}: {slot} erased first - "
+                "a power cut from here on boots the other image")
+            run(f"erase {slot}", "--erase", p1)
+            run(f"erase SSBL.{slot}", "--erase", ssbl)
+            run(f"write SSBL.{slot}", "--add-raw", os.path.join(staging, "u-boot.itb"), "--slot", ssbl)
+            run(f"erase CORE.{slot}", "--erase", corep)
+            run(f"write CORE.{slot}", "--add-raw", os.path.join(staging, "core.bin"), "--slot", corep)
+            boot = self._write_boot_files({f"u-boot_{slot}.itb": files["u-boot.itb"],
+                                           f"de25_std_{slot}.core.rbf": core})
             steps.append("card")
             if not boot["written"]:
                 raise CoreError("card: " + boot.get("error", "not written"))
-            slot_dir = os.path.join(os.path.dirname(self.firmware), RSU_SLOT)
+            slot_dir = os.path.join(os.path.dirname(self.firmware), slot)
             os.makedirs(slot_dir, exist_ok=True)
             write_file(os.path.join(slot_dir, MANIFEST_NAME), files[MANIFEST_NAME])
             write_file(os.path.join(slot_dir, CORE_NAME), core)
             write_file(os.path.join(slot_dir, RSU_MANIFEST), files[RSU_MANIFEST])
             steps.append("/lib/firmware")
-            run("write P1", "--add", os.path.join(staging, "app.rpd"), "--slot", p1)
-            run("verify P1", "--verify", os.path.join(staging, "app.rpd"), "--slot", p1)
+            run(f"write {slot}", "--add", os.path.join(staging, "app.rpd"), "--slot", p1)
+            run(f"verify {slot}", "--verify", os.path.join(staging, "app.rpd"), "--slot", p1)
         except (CoreError, OSError) as e:
             self.last_rsu = {"ok": False, "error": str(e), "steps": steps, "at": time.time(),
                              "build_id": manifest["build_id"]}
-            log("RSU update failed:", e, "- P1 is not bootable, the factory image boots next")
-            return {"ok": False, "error": str(e), "steps": steps,
-                    "note": "P1 is erased or incomplete: the next boot runs the factory image"}
+            log("RSU update failed:", e, f"- {slot} is not bootable, another image boots next")
+            return {"ok": False, "error": str(e), "steps": steps, "slot": slot,
+                    "note": f"{slot} is erased or incomplete: the next boot runs another image"}
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         secs = round(time.time() - t0, 1)
-        self.last_rsu = {"ok": True, "build_id": manifest["build_id"], "steps": steps,
+        self.last_rsu = {"ok": True, "build_id": manifest["build_id"], "steps": steps, "slot": slot,
                          "seconds": secs, "at": time.time(), "rebooting": reboot}
-        log(f"RSU update written: build {manifest['build_id']} in P1, {secs} s"
+        log(f"RSU update written: build {manifest['build_id']} in {slot}, {secs} s"
             + (" - rebooting into it" if reboot else ""))
         if reboot:
-            # load P1 from flash at the reboot (the running image's own address
+            # load the slot from flash at the reboot (the running image's own address
             # works too - tested), after the reply is out
             with open(os.path.join(RSU_SYSFS, "reboot_image"), "w") as f:
-                f.write(hex(parts[RSU_SLOT][1]))
+                f.write(hex(parts[slot][1]))
             threading.Timer(2.0, lambda: subprocess.run(["reboot"], check=False)).start()
         return {"ok": True, "build_id": manifest["build_id"], "seconds": secs, "steps": steps,
-                "rebooting": reboot}
+                "slot": slot, "rebooting": reboot}
 
     def _clear_pending(self):
         try:

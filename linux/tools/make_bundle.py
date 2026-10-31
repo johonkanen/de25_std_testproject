@@ -6,6 +6,7 @@ make_bundle.py - a signed RAUC bundle for the DE25-Standard
     python3 linux/tools/make_bundle.py gui          # linux/webapp/ as a GUI release
     python3 linux/tools/make_bundle.py core         # build/images' FPGA core
     python3 linux/tools/make_bundle.py gui core     # both, one bundle (GUI activated first)
+    python3 linux/tools/make_bundle.py image        # the whole image: rootfs + QSPI (step 2)
     python3 linux/tools/make_bundle.py core --core X.core.rbf --out x.raucb
     python3 linux/tools/make_bundle.py gui --keys DIR   # another key pair (refusal tests)
 
@@ -15,6 +16,16 @@ Each part is one artifact for the board's repositories (system.conf):
                           static/, VERSION with the git state, BOARD)
     [image.core/de25_std] de25_std.core.rbf + de25_std.core.json (make_jic.sh),
                           checked as deploy_fpga.py checks them
+
+An image (docs/plan_rauc.md step 2, A/B) goes into the slot group that is
+not running, in this order:
+
+    [image.rootfs]        build/images/rootfs.ext4 (make_sdcard_image.sh): the
+                          rootfs with its kernel and DT
+    [image.qspi]          the RSU bundle (make_rsu_bundle.py's: application
+                          image, its U-Boot, its core), written by the
+                          bundle's install hook (linux/board/rauc/image-hook)
+                          through fpga_access.py
 
 On the board `rauc install` checks the signature (keys from
 linux/tools/rauc_keys.sh), dm-verity and compatible=de25-std, then its
@@ -37,12 +48,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from deploy_fpga import CORE_NAME, pack_bundle  # noqa: E402
 from deploy_web import pack_release  # noqa: E402
+import make_rsu_bundle  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(ROOT, "build", "images")
 RAUC = os.path.join(ROOT, "build", "rauc", "rauc-host")
 COMPATIBLE = "de25-std"
 ARTIFACT = {"gui": "de25web", "core": "de25_std"}
+ROOTFS = os.path.join(OUT, "rootfs.ext4")
+HOOK = os.path.join(ROOT, "linux", "board", "rauc", "image-hook")
+ORDER = ("image", "gui", "core")       # the slots first, then the artifacts
 
 
 def make(parts, core_path, manifest_path, keys, out=None):
@@ -66,11 +81,32 @@ def make(parts, core_path, manifest_path, keys, out=None):
         built = time.strftime("%Y-%m-%d %H:%M", time.localtime(manifest["build_id"]))
         desc.append(f"core build {manifest['build_id']} ({built})")
         version.append(f"core{manifest['build_id']}")
+    image = None
+    if "image" in parts:
+        if not os.path.isfile(ROOTFS):
+            sys.exit(f"no {ROOTFS} - run ./build.sh sdcard")
+        qspi, rsu = make_rsu_bundle.pack({n: os.path.join(ROOT, "build", d)
+                                          for n, d in make_rsu_bundle.FILES.items()})
+        image = qspi
+        desc.insert(0, f"image build {rsu['build_id']} (git {rsu['git']}), rootfs "
+                       f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(os.path.getmtime(ROOTFS)))}")
+        version.insert(0, f"build{rsu['build_id']}")
     version = "_".join(version)
     with tempfile.TemporaryDirectory() as work:
         content = os.path.join(work, "content")
         os.mkdir(content)
         sections = []
+        if image is not None:
+            try:                                # 512 MB: a link where it can be one
+                os.link(ROOTFS, os.path.join(content, "rootfs.ext4"))
+            except OSError:
+                shutil.copyfile(ROOTFS, os.path.join(content, "rootfs.ext4"))
+            with open(os.path.join(content, "qspi.tar.gz"), "wb") as f:
+                f.write(image)
+            shutil.copyfile(HOOK, os.path.join(content, "hook"))
+            os.chmod(os.path.join(content, "hook"), 0o755)
+            sections.append("[image.rootfs]\nfilename=rootfs.ext4\n")
+            sections.append("[image.qspi]\nfilename=qspi.tar.gz\nhooks=install\n")
         for part in ("gui", "core"):            # the handler's order, too
             if part not in tars:
                 continue
@@ -80,9 +116,11 @@ def make(parts, core_path, manifest_path, keys, out=None):
         with open(os.path.join(content, "manifest.raucm"), "w") as f:
             f.write(f"[update]\ncompatible={COMPATIBLE}\nversion={version}\n"
                     f"description={', '.join(desc)}\nbuild={time.strftime('%Y-%m-%dT%H:%M:%S')}\n\n"
-                    "[bundle]\nformat=verity\n\n" + "\n".join(sections))
+                    "[bundle]\nformat=verity\n\n"
+                    + ("[hooks]\nfilename=hook\n\n" if image is not None else "")
+                    + "\n".join(sections))
         os.makedirs(OUT, exist_ok=True)
-        out = out or os.path.join(OUT, f"de25_std_{'+'.join(p for p in ('gui', 'core') if p in tars)}_{version}.raucb")
+        out = out or os.path.join(OUT, f"de25_std_{'+'.join(p for p in ORDER if p in parts)}_{version}.raucb")
         if os.path.exists(out):
             os.remove(out)
         r = subprocess.run([RAUC, "bundle", f"--cert={cert}", f"--key={key}", content, out],
@@ -94,7 +132,7 @@ def make(parts, core_path, manifest_path, keys, out=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("parts", nargs="+", choices=("gui", "core"))
+    ap.add_argument("parts", nargs="+", choices=ORDER)
     ap.add_argument("--core", default=os.path.join(OUT, CORE_NAME))
     ap.add_argument("--manifest", default=None, help="default: the .json beside --core")
     ap.add_argument("--keys", default=os.environ.get("RAUC_KEYS", os.path.expanduser("~/.de25_rauc_keys")))

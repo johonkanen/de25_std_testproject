@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""
+The install hook of an image bundle (make_bundle.py image; docs/plan_rauc.md
+step 2). RAUC calls it with "slot-install" for the QSPI image instead of
+writing the slot itself: qspi.0 belongs to P1, qspi.1 to P2 (system.conf),
+and RAUC_SLOT_BOOTNAME names it. The image is an RSU bundle
+(make_rsu_bundle.py: application image, its U-Boot, its core and their
+manifest), and fpga_access.py writes it into that slot - the order and checks
+of POST /api/rsu: the slot erased first, U-Boot and core into SSBL.<slot> and
+CORE.<slot>, the card files, the core for /lib/firmware/rsu/<slot>, the image
+last, verified. No reboot here: RAUC makes the slot primary afterwards, and
+the post-install handler reboots.
+
+An fpga_access.py from before the A/B layout would ignore the slot and write
+P1 even while P1 runs, so this refuses to go on unless it reports the
+per-image state (the "images" field of its rsu answer).
+"""
+import json
+import os
+import socket
+import sys
+
+RUN = os.environ.get("DE25WEB_RUN", "/run/de25web")
+
+
+def fpga(req, timeout):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(os.path.join(RUN, "fpga.sock"))
+        s.sendall(json.dumps(req).encode() + b"\n")
+        return json.loads(s.makefile("rb").readline())
+    finally:
+        s.close()
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] != "slot-install":
+        return 0                                # no other hooks
+    slot = os.environ.get("RAUC_SLOT_BOOTNAME", "")
+    image = os.environ.get("RAUC_IMAGE_NAME", "")
+    if slot not in ("P1", "P2"):
+        print(f"image-hook: slot {os.environ.get('RAUC_SLOT_NAME')!r} has bootname {slot!r}, not P1/P2")
+        return 1
+    try:
+        info = fpga({"op": "rsu"}, timeout=60)
+    except (OSError, ValueError) as e:
+        print(f"image-hook: fpga_access.py does not answer ({e})")
+        return 1
+    if "images" not in info:
+        print("image-hook: fpga_access.py predates the A/B layout (no per-image state) - "
+              "deploy a GUI release from docs/plan_rauc.md step 2 first")
+        return 1
+    if info.get("slot") == slot:
+        print(f"image-hook: {slot} is the image running - RAUC should have picked the other one")
+        return 1
+    print(f"image-hook: writing {os.path.basename(image)} into {slot} (QSPI {slot}, SSBL.{slot}, CORE.{slot})",
+          flush=True)
+    try:
+        r = fpga({"op": "install_rsu", "bundle": image, "reboot": False, "slot": slot}, timeout=900)
+    except (OSError, ValueError) as e:
+        print(f"image-hook: fpga_access.py: {e}")
+        return 1
+    if not r.get("ok") or r.get("slot") != slot:
+        print(f"image-hook: {slot} not written: {r.get('error', r)}" + (f" - {r['note']}" if r.get("note") else ""))
+        return 1
+    print(f"image-hook: build {r.get('build_id')} in {slot}, {r.get('seconds')} s ({', '.join(r.get('steps', []))})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

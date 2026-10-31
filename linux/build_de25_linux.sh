@@ -133,7 +133,16 @@ pushd "${SRC}/u-boot-altera" >/dev/null
     # them in reset (rstmgr brgmodrst = 0xf) and the first LWH2F access from
     # Linux is a SIGBUS. `bridge enable` refuses when the fabric is not
     # configured.
-    scripts/config --set-str CONFIG_BOOTCOMMAND "bridge enable; run distro_bootcmd"
+    # Each image boots its own rootfs (docs/plan_rauc.md step 2, A/B):
+    # `rsu running_slot` FACTORY_IMAGE -> mmc 0:2, P1 -> 0:3, P2 -> 0:5
+    # (no RSU layout: 0:2). The kernel and DT come from that rootfs's /boot,
+    # root= says which partition it is (RAUC finds the booted slot from it).
+    # A rootfs without /boot/Image (cards from before step 2) falls back to
+    # distro boot: the FAT's extlinux.conf. No double quotes inside (the
+    # string goes into .config as it is) and no "&" (scripts/config puts it
+    # through sed, where & is the matched text) - checked below.
+    BOOTARGS_COMMON="console=ttyS0,115200 rw rootwait earlycon panic=-1 kvm-arm.mode=nvhe watchdog.open_timeout=120"
+    scripts/config --set-str CONFIG_BOOTCOMMAND "bridge enable; setenv rootpart 2; if rsu running_slot rsu_slot; then if test \${rsu_slot} = P1; then setenv rootpart 3; elif test \${rsu_slot} = P2; then setenv rootpart 5; fi; fi; echo rootfs mmc 0:\${rootpart}; if load mmc 0:\${rootpart} \${kernel_addr_r} /boot/Image; then if load mmc 0:\${rootpart} \${fdt_addr_r} /boot/${LINUX_DTB}; then setenv bootargs ${BOOTARGS_COMMON} root=/dev/mmcblk0p\${rootpart}; booti \${kernel_addr_r} - \${fdt_addr_r}; fi; fi; echo no /boot/Image on mmc 0:\${rootpart} - distro boot; run distro_bootcmd"
     # HPS-first images (./build.sh fpga, the default): the SDM leaves the
     # FPGA core unconfigured; load it before anything else. Skipped when the
     # fabric is configured already (FPGA-first image, JTAG .sof, software
@@ -148,7 +157,8 @@ pushd "${SRC}/u-boot-altera" >/dev/null
     scripts/config --enable CONFIG_USE_PREBOOT
     scripts/config --set-str CONFIG_PREBOOT "if itest.l *0x10d120dc != 3; then if rsu running_slot rsu_slot && env exists rsu_slot_core; then setenv core_file ${CORE_NAME%.core.rbf}_\${rsu_slot}.core.rbf; setenv core_offs \${rsu_slot_core}; else setenv core_file ${CORE_NAME}; setenv core_offs $(printf '%#x' "${QSPI_CORE_OFFS}"); fi; if load mmc 0:1 \${loadaddr} \${core_file} && fpga load 0 \${loadaddr} \${filesize}; then echo core \${core_file} from SD; else sf probe && sf read \${loadaddr} \${core_offs} 0x1000 && env import -t \${loadaddr} && setexpr core_data \${core_offs} + 0x1000 && sf read \${loadaddr} \${core_data} \${core_size} && fpga load 0 \${loadaddr} \${core_size} && echo core from QSPI \${core_offs}; fi; fi"
     make olddefconfig
-    grep -q '^CONFIG_BOOTCOMMAND="bridge enable; run distro_bootcmd"$' .config || {
+    grep -q '^CONFIG_BOOTCOMMAND="bridge enable; setenv rootpart 2; .*run distro_bootcmd"$' .config &&
+        [[ "$(grep -c 'CONFIG_BOOTCOMMAND' .config)" == 1 ]] || {
         echo "ERROR: CONFIG_BOOTCOMMAND not set"; exit 1; }
     grep -q '^CONFIG_PREBOOT="if itest.l \*0x10d120dc != 3; then' .config || {
         echo "ERROR: CONFIG_PREBOOT not set"; exit 1; }

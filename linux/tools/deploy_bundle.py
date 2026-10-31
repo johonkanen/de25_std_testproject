@@ -9,7 +9,10 @@ token), and follows the board's `rauc install` until it ends. A GUI release
 in the bundle goes on test on the board: this checks it the way
 deploy_web.py does (the version answers, the register file answers with the
 board id) and confirms it, which is what lets the install succeed. An FPGA
-core is loaded and checked by the board itself.
+core is loaded and checked by the board itself. An image (step 2) goes into
+the application image not running; the board reboots into it, and this
+follows it until that image is confirmed (rsu-confirm) - or reports the
+SDM's fallback.
 
     python3 linux/tools/make_bundle.py gui core && python3 linux/tools/deploy_bundle.py
     python3 linux/tools/deploy_bundle.py --bundle X.raucb --host 10.0.0.5
@@ -122,7 +125,8 @@ def main():
     if st.get("running"):
         sys.exit(f"{base} is already installing a bundle")
     before = ver.get("release")
-    print(f">> board runs GUI {before}")
+    rsu_before = get(base, "/api/rsu", timeout=30)
+    print(f">> board runs GUI {before}" + (f", image {rsu_before.get('slot')}" if rsu_before and rsu_before.get("slot") else ""))
 
     token = args.token
     if token is None and os.path.exists(args.token_file):
@@ -153,11 +157,43 @@ def main():
         if not confirmed and not args.no_confirm and st.get("running"):
             confirmed = bool(confirm_release(base, before))
         if st.get("rc") is not None:
-            if st["rc"] == 0:
-                print(f">> installed in {time.time() - t0:.0f} s")
-                return 0
-            sys.exit(f">> rauc install failed (exit {st['rc']}) - the board keeps what it had")
+            if st["rc"] != 0:
+                sys.exit(f">> rauc install failed (exit {st['rc']}) - the board keeps what it had")
+            print(f">> installed in {time.time() - t0:.0f} s")
+            if st.get("reboot"):
+                return follow_reboot(base, rsu_before, t0, args.wait)
+            return 0
     sys.exit(f"no result within {args.wait:.0f} s")
+
+
+def follow_reboot(base, before, t0, wait):
+    """an image bundle: the board reboots into the slot group that was not
+    running. Done once /api/rsu says that image runs and is confirmed;
+    the SDM falling back to another image is a failure."""
+    was = (before or {}).get("slot")
+    print(f">> rebooting from {was} into the other image; waiting for its confirmation")
+    deadline, seen_down, last = time.time() + max(wait, 600), False, ""
+    while time.time() < deadline:
+        time.sleep(5)
+        rsu = get(base, "/api/rsu", timeout=10)
+        if rsu is None:
+            seen_down = True
+            continue
+        if not seen_down:
+            continue                            # still the old boot
+        st = rsu.get("status") or {}
+        line = (f"image {rsu.get('slot')}, confirm {rsu.get('confirm')!r}, "
+                f"fail image {st.get('fail_image')}")
+        if line != last:
+            print(f"   {time.time() - t0:5.0f} s  {line}")
+            last = line
+        if rsu.get("slot") and rsu.get("slot") != was and (rsu.get("confirm") or "").startswith("confirmed"):
+            print(f">> {rsu['slot']} confirmed, {time.time() - t0:.0f} s after the upload")
+            return 0
+        if rsu.get("slot") == was or rsu.get("slot") == "FACTORY_IMAGE":
+            if (rsu.get("confirm") or "").startswith(("confirmed", "factory")):
+                sys.exit(f">> the new image did not come up healthy: the SDM fell back to {rsu.get('slot')}")
+    sys.exit(f"no confirmation within {max(wait, 600):.0f} s; last: {last or 'no answer'}")
 
 
 if __name__ == "__main__":

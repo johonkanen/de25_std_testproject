@@ -65,7 +65,8 @@ API:
     POST /api/bundle                body: a signed RAUC bundle .raucb (linux/tools/make_bundle.py);
                                     headers X-Sha256, X-Token. `rauc install` runs detached
                                     (a GUI release in it restarts this server); 202 at once
-    GET  /api/bundle                that install: running, exit code, its output; rauc present
+    GET  /api/bundle                that install: running, exit code, its output; rauc present;
+                                    an image bundle (step 2) reboots into its slot group afterwards
 """
 import argparse
 import collections
@@ -457,7 +458,7 @@ class Releases:
 # --------------------------------------------------------------------------
 CORE_BUNDLE_MAX = 32 << 20
 RSU_BUNDLE_MAX = 32 << 20
-RAUC_BUNDLE_MAX = 64 << 20
+RAUC_BUNDLE_MAX = 512 << 20          # an image bundle carries the rootfs (step 2)
 
 
 # --------------------------------------------------------------------------
@@ -474,6 +475,10 @@ class Bundles:
 
     def __init__(self, run):
         self.dir = os.path.join(run, "bundle")
+        # the upload itself: on the data partition when there is one (an
+        # image bundle is too big for the rootfs), else beside the state
+        self.upload_dir = os.environ.get("DE25WEB_UPLOAD_DIR") or (
+            "/data/upload" if os.path.ismount("/data") else self.dir)
         self.lock = threading.Lock()
 
     @property
@@ -503,23 +508,50 @@ class Bundles:
         return {"rauc": self.available, "running": self.running(),
                 "rc": int(rc) if rc and rc.strip().lstrip("-").isdigit() else None,
                 "log": log[-8000:] if log else None,
+                "reboot": os.path.exists(os.path.join(self.dir, "reboot")),
                 "started": os.path.getmtime(os.path.join(self.dir, "pid"))
                 if os.path.exists(os.path.join(self.dir, "pid")) else None}
 
-    def start(self, blob):
+    def receive(self, rfile, length, sha256):
+        """the upload, streamed to its file (never all of it in memory: an
+        image bundle is hundreds of MB, the board has 1 GB) and hashed on
+        the way; the path, or ValueError (removed again)"""
+        os.makedirs(self.upload_dir, exist_ok=True)
+        bundle = os.path.join(self.upload_dir, "upload.raucb")
+        h, left = hashlib.sha256(), length
+        try:
+            with open(bundle, "wb") as f:
+                while left:
+                    chunk = rfile.read(min(left, 1 << 20))
+                    if not chunk:
+                        raise ValueError(f"the upload ended {left} bytes short")
+                    h.update(chunk)
+                    f.write(chunk)
+                    left -= len(chunk)
+            if h.hexdigest() != sha256.lower():
+                raise ValueError("sha256 does not match the upload")
+        except (ValueError, OSError):
+            if os.path.exists(bundle):
+                os.remove(bundle)
+            raise
+        return bundle
+
+    def start(self, bundle):
         with self.lock:
             if self.running():
+                os.remove(bundle)
                 raise RuntimeError("a bundle install is already running")
             os.makedirs(self.dir, exist_ok=True)
             for n in ("rc", "log", "pid"):
                 if os.path.exists(os.path.join(self.dir, n)):
                     os.remove(os.path.join(self.dir, n))
-            bundle = os.path.join(self.dir, "upload.raucb")
-            with open(bundle, "wb") as f:
-                f.write(blob)
             d = self.dir
-            script = (f'{self.RAUC} install "{bundle}" > "{d}/log" 2>&1; rc=$?; '
-                      f'rm -f "{bundle}"; echo $rc > "{d}/rc.new"; mv "{d}/rc.new" "{d}/rc"')
+            # an image bundle's handler leaves "reboot": the new slot group is
+            # primary, boot it - only after rauc has exited 0 (its status saved)
+            script = (f'rm -f "{d}/reboot"; {self.RAUC} install "{bundle}" > "{d}/log" 2>&1; rc=$?; '
+                      f'rm -f "{bundle}"; echo $rc > "{d}/rc.new"; mv "{d}/rc.new" "{d}/rc"; '
+                      f'if [ $rc = 0 ] && [ -e "{d}/reboot" ]; then '
+                      f'echo "rebooting into the new image" >> "{d}/log"; sleep 3; reboot; fi')
             proc = subprocess.Popen(["/bin/sh", "-c", script], start_new_session=True,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, close_fds=True)
@@ -841,15 +873,22 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                 self.close_connection = True
                 self._json({"error": "a bundle install is already running"}, 409)
                 return
-            blob = self._body(limit=RAUC_BUNDLE_MAX)
-            if hashlib.sha256(blob).hexdigest() != self.headers.get("X-Sha256", "").lower():
-                raise ValueError("sha256 does not match the upload")
+            length = int(self.headers.get("Content-Length", 0))
+            if length > RAUC_BUNDLE_MAX:
+                self.close_connection = True
+                raise ValueError(f"body too large ({length} bytes, at most {RAUC_BUNDLE_MAX})")
             try:
-                bundles.start(blob)
+                bundle = bundles.receive(self.rfile, length, self.headers.get("X-Sha256", ""))
+            except OSError as e:
+                self.close_connection = True
+                self._json({"error": f"the upload could not be stored: {e}"}, 507)
+                return
+            try:
+                bundles.start(bundle)
             except RuntimeError as e:
                 self._json({"error": str(e)}, 409)
                 return
-            self._json({"started": True, "size": len(blob)}, 202)
+            self._json({"started": True, "size": length}, 202)
 
         def log_message(self, fmt, *args):
             polled = ("/api/events", "/api/board", "/api/version", "/api/control", "/api/fpga", "/api/rsu",

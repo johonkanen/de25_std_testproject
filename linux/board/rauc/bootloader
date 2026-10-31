@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""
+RAUC's boot backend for the DE25-Standard (bootloader=custom,
+docs/plan_rauc.md step 2): RAUC's primary slot and good/bad states mapped
+onto the SDM's remote system update, through rsu_client.
+
+The SDM boots the highest-priority application image that is enabled and
+has not failed (priority 1 is the highest), else the factory image. A
+bootname is the image's SPT name: P1, P2, FACTORY_IMAGE.
+
+    get-primary            the enabled one of P1/P2 with the best priority,
+                           else FACTORY_IMAGE
+    set-primary P1|P2      rsu_client --enable: that image to the top
+    get-state NAME         bad: disabled/erased, or the image the SDM last
+                           recorded as failed; good otherwise (the factory
+                           image is always good)
+    set-state NAME bad     rsu_client --disable: RAUC does this to the target
+                           before it writes anything, so a power cut from then
+                           on boots the other image
+    set-state NAME good    nothing to write: an image is good while enabled
+                           and not the failed one (rsu-confirm resets the
+                           retry counter when the running one is healthy)
+    get-current            the image the SDM booted (rsu_client --log)
+
+Exit 0 on success, non-zero with the reason on stderr otherwise.
+RSU_CLIENT overrides the rsu_client binary (tests).
+"""
+import os
+import re
+import subprocess
+import sys
+
+RSU_CLIENT = os.environ.get("RSU_CLIENT", "rsu_client")
+APP_IMAGES = ("P1", "P2")
+FACTORY = "FACTORY_IMAGE"
+
+
+class Error(Exception):
+    pass
+
+
+def rsu(*args):
+    try:
+        r = subprocess.run([RSU_CLIENT, *map(str, args)], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Error(f"rsu_client {' '.join(map(str, args))}: {e}") from None
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode != 0 or re.search(r"^ERROR:", out, re.M):
+        raise Error(f"rsu_client {' '.join(map(str, args))}: {out[-300:]}")
+    return out
+
+
+def fields(text):
+    return {k.strip().upper(): v.strip() for k, v in
+            (line.split(":", 1) for line in text.splitlines() if ":" in line)}
+
+
+def images():
+    """{name: (slot number, offset, priority or None if disabled)} for P1, P2"""
+    m = re.search(r"number of slots is (\d+)", rsu("--count"))
+    if not m:
+        raise Error("rsu_client --count: no slot count")
+    out = {}
+    for i in range(int(m.group(1))):
+        f = fields(rsu("--list", i))
+        name = f.get("NAME", "")
+        if name in APP_IMAGES:
+            prio = f.get("PRIORITY", "")
+            out[name] = (i, int(f.get("OFFSET", "0"), 16), int(prio) if prio.isdigit() else None)
+    return out
+
+
+def log():
+    """CURRENT IMAGE and FAIL IMAGE offsets from rsu_client --log"""
+    f = fields(rsu("--log"))
+    try:
+        return int(f.get("CURRENT IMAGE", "0"), 16), int(f.get("FAIL IMAGE", "0"), 16)
+    except ValueError:
+        raise Error(f"rsu_client --log: {f}") from None
+
+
+def need_app(name):
+    if name not in APP_IMAGES:
+        raise Error(f"{name!r} is not an application image ({', '.join(APP_IMAGES)})")
+
+
+def main(argv):
+    if not argv:
+        raise Error("usage: bootloader get-primary|set-primary|get-state|set-state|get-current")
+    cmd, args = argv[0], argv[1:]
+    if cmd == "get-primary":
+        enabled = [(p, n) for n, (_, _, p) in images().items() if p is not None]
+        print(min(enabled)[1] if enabled else FACTORY)
+    elif cmd == "set-primary" and len(args) == 1:
+        need_app(args[0])
+        rsu("--enable", images()[args[0]][0])
+    elif cmd == "get-state" and len(args) == 1:
+        if args[0] == FACTORY:
+            print("good")
+            return 0
+        need_app(args[0])
+        num, offset, prio = images()[args[0]]
+        _, fail = log()
+        print("bad" if prio is None or (fail and fail == offset) else "good")
+    elif cmd == "set-state" and len(args) == 2 and args[1] in ("good", "bad"):
+        if args[0] == FACTORY:
+            if args[1] == "bad":
+                raise Error("the factory image cannot be marked bad")
+            return 0
+        need_app(args[0])
+        num, _, prio = images()[args[0]]
+        if args[1] == "bad" and prio is not None:
+            rsu("--disable", num)
+    elif cmd == "get-current":
+        current, _ = log()
+        names = {off: n for n, (_, off, _) in images().items()}
+        print(names.get(current, FACTORY))
+    else:
+        raise Error(f"bad call: {' '.join(argv)}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Error as e:
+        print(f"bootloader backend: {e}", file=sys.stderr)
+        sys.exit(1)
