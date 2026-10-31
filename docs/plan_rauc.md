@@ -210,8 +210,10 @@ Still open in step 1:
   The page's Update card in a real browser (`gui_test.py --bundle`, headless
   Chromium, the file picked into the input): a GUI release (page reloaded
   into it and confirmed it, 10 s) and two real core loads (7 s, 6 s), each
-  refused first with a wrong token. An image bundle through the page is not
-  tried yet (46 MB hashed in the page's JavaScript SHA-256, then the reboot).
+  refused first with a wrong token. An image bundle through the page too
+  (46 MB, hashed in the page's JavaScript): wrong token refused, then
+  installed into P1 in 126 s, "the board reboots", the page came back by
+  itself on P1 and showed it confirmed, 167 s from the click.
 
 Board findings in step 2 (all fixed):
 - A GUI release installed seconds before the HPS stopped (the JTAG

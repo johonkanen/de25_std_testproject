@@ -14,7 +14,9 @@ it. --bundle PATH (repeatable) also installs a RAUC bundle through the
 Update card, as a person would (the file picked into the input, the token
 typed): first with a wrong token (refused), then with the right one, and
 follows it - a GUI release: the page reloads into it and confirms it, and
-`rauc install` ends with exit 0; a core: "Installed." and the build runs.
+`rauc install` ends with exit 0; a core: "Installed." and the build runs;
+an image: "the board reboots", the page comes back by itself on the other
+application image, and its image card shows it confirmed.
 Exit status 1 when the page does not show what was expected.
 
 Works against the board or a local `fpga_web.py --sim`:
@@ -129,6 +131,14 @@ def api(path, body=None):
                                  data=None if body is None else json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     return json.load(urllib.request.urlopen(req, timeout=5))
+
+
+def api_or_none(path):
+    """api(), or None while the board reboots"""
+    try:
+        return api(path)
+    except (OSError, ValueError):
+        return None
 
 
 def check(ok, text):
@@ -301,27 +311,49 @@ def bundle_tests(page, path):
     # a wrong token: refused before the body, nothing installed
     pick()
     submit("wrong-token")
-    shown = wait_for(lambda: (lambda m: m if m.startswith("Not installed") else None)(msg()), 60)
+    # (the page hashes the file first: an image bundle takes a while)
+    shown = wait_for(lambda: (lambda m: m if m.startswith("Not installed") else None)(msg()), 300)
     check(bool(shown) and "X-Token" in shown, f"Update card, {name}, wrong token: {shown!r}")
     # the right token
     before = api("/api/version")["release"]
     core_before = api("/api/fpga").get("running_build_id")
+    image_before = (api("/api/rsu") or {}).get("slot")
     page.js("window.__before_install = 1")
     pick()
     submit(token)
     t0 = time.time()
-    outcome = None
-    while time.time() - t0 < 300 and outcome is None:
+    outcome, rebooting = None, False
+    # an image bundle: hashed in the page (46 MB), ~2 min install, a reboot
+    while time.time() - t0 < 900 and outcome is None:
         time.sleep(1)
         try:
             reloaded = page.js("window.__before_install === undefined")
             m = msg()
         except Exception:                       # the page reloading under us
             continue
+        if "reboots" in m:
+            if not rebooting:
+                print(f"      {name}: {m!r} ({time.time() - t0:.0f} s)")
+            rebooting = True
         if reloaded:
-            outcome = "reloaded"
-        elif m.startswith(("Installed", "rauc install failed", "Not installed")):
+            outcome = "rebooted" if rebooting else "reloaded"
+        elif m.startswith(("Installed.", "rauc install failed", "Not installed")):
             outcome = m
+    if outcome == "rebooted":
+        # an image: the page waited for the board and reloaded by itself; the
+        # other application image must run and get confirmed
+        r = wait_for(lambda: (lambda r: r if r and r.get("slot") not in (None, image_before)
+                              and (r.get("confirm") or "").startswith("confirmed") else None)(
+            api_or_none("/api/rsu")), 300)
+        card = wait_for(lambda: (lambda t: t if r and t == r.get("slot") else None)(
+            page.js('document.getElementById("rsu-image").textContent')), 30)
+        pill = wait_for(lambda: (lambda t: t if t == "confirmed" else None)(
+            page.js('document.getElementById("rsu-confirm").textContent')), 40)
+        check(bool(r) and bool(card) and bool(pill),
+              f"Update card, {name}: board rebooted from {image_before} into "
+              f"{r and r.get('slot')} ({r and r.get('confirm')!r}); page shows {card!r} {pill!r} - "
+              f"{time.time() - t0:.0f} s")
+        return
     if outcome == "reloaded":
         # a GUI release: the new page confirms it (loadVersion), which lets
         # rauc install finish

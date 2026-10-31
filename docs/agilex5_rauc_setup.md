@@ -626,7 +626,7 @@ On the board (DE25-Standard results, [plan_rauc.md](plan_rauc.md)):
 | confirmation killed on a new image (`pkill -KILL rsu-confirm`) | watchdog, the SDM loads the **other application image**, the failed one is `bad` in RAUC |
 | install into the failed slot | confirmed, failure record cleared |
 | power cut during the rootfs write | the other image boots, confirmed; the interrupted slot is disabled; the next install into it is confirmed |
-| the Update card in a browser (`gui_test.py --bundle`) | application and core bundles, wrong token refused |
+| the Update card in a browser (`gui_test.py --bundle`) | application, core and image bundles (the image: rebooted into P1, the page back on its own showing it confirmed, 167 s), wrong token refused |
 
 To time a power cut, wait on the **board's** install log
 (`GET /api/bundle` until "writing data to device"), not on a local tool's
