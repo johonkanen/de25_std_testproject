@@ -15,7 +15,10 @@
 #   gunzip -c build/images/sdcard.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync
 #
 # Needs ./build.sh linux (u-boot.itb, Image, .dtb), and for an HPS-first
-# image ./build.sh jic (the core).
+# image ./build.sh jic (the core). With ./build.sh rauc and the RAUC keys
+# (linux/tools/rauc_keys.sh) the rootfs also gets RAUC (docs/plan_rauc.md):
+# /usr/bin/rauc, /etc/rauc/system.conf, the CA as /etc/rauc/keyring.pem,
+# the post-install handler.
 # Env: BUILD_DIR, IMG_MB (default 768 - the rootfs can be grown on the
 # board later), BOOT_MB (128), BOARD_IP, BOARD_GW, ALPINE_VERSION,
 # DE25WEB_TOKEN_FILE (the web GUI's update token; default
@@ -38,6 +41,13 @@ CORE="${IMAGES}/de25_std.core.rbf"
 IMG="${IMAGES}/sdcard.img"
 TOKEN_FILE="${DE25WEB_TOKEN_FILE:-${HOME}/.de25web_token_std}"
 [[ -s "${TOKEN_FILE}" ]] || TOKEN_FILE=""
+# RAUC (docs/plan_rauc.md): the board's binary and the CA bundles must chain to
+RAUC_BIN="${BUILD_DIR}/rauc/rauc-aarch64"
+RAUC_CA="${RAUC_KEYS:-${HOME}/.de25_rauc_keys}/ca.cert.pem"
+if [[ ! -x "${RAUC_BIN}" || ! -f "${RAUC_CA}" ]]; then
+    echo "NOTE: no RAUC in this image (needs ${RAUC_BIN}: ./build.sh rauc, and ${RAUC_CA}: rauc_keys.sh)"
+    RAUC_BIN=""
+fi
 # the board's eth0 MAC, kept across re-imaged cards like the token (a new
 # one each image left the LAN's ARP caches pointing at the old card)
 MAC_FILE="${DE25_MAC_FILE:-${HOME}/.de25_std_mac}"
@@ -115,8 +125,18 @@ DE25WEB_TOKEN_FILE="${TOKEN_FILE}" BOARD_MAC="${BOARD_MAC}" fakeroot -- bash -eu
         install -D -m 644 "$8/rsu/librsu.rc" "$1/root/etc/librsu.rc"
         echo "   + /usr/bin/rsu_client, /etc/librsu.rc"
     fi
+    # RAUC (docs/plan_rauc.md): install-only binary, config, CA, handler
+    if [ -n "$9" ]; then
+        install -D -m 755 "$9" "$1/root/usr/bin/rauc"
+        install -D -m 644 "$3/linux/board/rauc/system.conf" "$1/root/etc/rauc/system.conf"
+        install -D -m 644 "${10}" "$1/root/etc/rauc/keyring.pem"
+        install -D -m 755 "$3/linux/board/rauc/post-install" "$1/root/usr/lib/rauc/post-install"
+        install -d -m 755 "$1/root/var/lib/rauc/gui" "$1/root/var/lib/rauc/core"   # RAUC needs the repositories
+        echo "   + /usr/bin/rauc, /etc/rauc/{system.conf,keyring.pem}, /usr/lib/rauc/post-install"
+    fi
     mkfs.ext4 -q -F -L std-root -E offset=$(( $4 * 512 )) -d "$1/root" "$5" "$(( $6 / 2 ))k"
-' _ "${STAGE}" "${TARBALL}" "${TOP}" "${P2_START}" "${IMG}" "${P2_SECTORS}" "${CORE}" "${LOUT}"
+' _ "${STAGE}" "${TARBALL}" "${TOP}" "${P2_START}" "${IMG}" "${P2_SECTORS}" "${CORE}" "${LOUT}" \
+    "${RAUC_BIN}" "${RAUC_CA}"
 
 mmd   -i "${FAT}" ::extlinux
 mcopy -i "${FAT}" "${STAGE}/boot/extlinux/extlinux.conf" ::extlinux/

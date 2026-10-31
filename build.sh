@@ -6,9 +6,10 @@
 #                             (HPS-first; FPGA_FIRST=1: an FPGA-first image)
 #   ./build.sh sim            VHDL testbenches (VUnit + nvc) -> build/sim
 #   ./build.sh linux          ATF + U-Boot + kernel (linux/build_de25_linux.sh)
+#   ./build.sh rauc           RAUC, static, board + host (linux/build_rauc.sh; docker)
 #   ./build.sh jic            QSPI image -> build/images/de25_std.jic
 #   ./build.sh sdcard         SD card image -> build/images/sdcard.img.gz
-#   ./build.sh all            fpga, linux, jic, sdcard
+#   ./build.sh all            fpga, linux, rauc, jic, sdcard
 #
 # Env: BUILD_DIR (default build/), QUARTUS_BIN.
 set -euo pipefail
@@ -41,6 +42,8 @@ sim() { python3 "${ROOT}/fpga/vunit_run_de25_std_test.py" "${@}"; }
 
 linux() { "${ROOT}/linux/build_de25_linux.sh"; }
 
+rauc() { "${ROOT}/linux/build_rauc.sh"; }
+
 jic() { "${ROOT}/linux/make_jic.sh"; }
 
 sdcard() { "${ROOT}/linux/tools/make_sdcard_image.sh"; }
@@ -50,8 +53,9 @@ case "${1:-}" in
     fpga)         fpga ;;
     sim)          shift; sim "$@" ;;
     linux)        linux ;;
+    rauc)         rauc ;;
     jic)          jic ;;
     sdcard)       sdcard ;;
-    all)          fpga; linux; jic; sdcard ;;
-    *)            sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    all)          fpga; linux; rauc; jic; sdcard ;;
+    *)            sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

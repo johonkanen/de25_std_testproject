@@ -185,13 +185,18 @@ pushd "${SRC}/linux-altera" >/dev/null
     #                            FPGA core reload from Linux (fpga-reload)
     #   INTEL_STRATIX10_RSU      remote system update (rsu_client, plan Phase F)
     #   RTC_DRV_PCF85363         the board's PCF85263A RTC on I2C1
+    #   BLK_DEV_DM, DM_VERITY, CRYPTO_SHA256
+    #                            RAUC bundles: squashfs checked by dm-verity
+    #                            (docs/plan_rauc.md; SQUASHFS and BLK_DEV_LOOP
+    #                            are in the defconfig)
     for c in SENSORS_SOC64 FPGA_MGR_STRATIX10_SOC FPGA_BRIDGE FPGA_REGION OF_FPGA_REGION \
-             INTEL_STRATIX10_RSU RTC_DRV_PCF85363; do
+             INTEL_STRATIX10_RSU RTC_DRV_PCF85363 BLK_DEV_DM DM_VERITY CRYPTO_SHA256; do
         scripts/config --enable "CONFIG_${c}"
     done
     make olddefconfig
     for c in SENSORS_SOC64 FPGA_MGR_STRATIX10_SOC FPGA_BRIDGE FPGA_REGION OF_FPGA_REGION \
-             OF_OVERLAY OF_CONFIGFS INTEL_STRATIX10_RSU RTC_DRV_PCF85363; do
+             OF_OVERLAY OF_CONFIGFS INTEL_STRATIX10_RSU RTC_DRV_PCF85363 \
+             BLK_DEV_DM DM_VERITY CRYPTO_SHA256 SQUASHFS SQUASHFS_ZLIB BLK_DEV_LOOP; do
         grep -q "^CONFIG_${c}=y$" .config || { echo "ERROR: CONFIG_${c} not built in"; exit 1; }
     done
     make -j"${JOBS}" Image "intel/${LINUX_DTB}"

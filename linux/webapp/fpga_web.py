@@ -62,6 +62,10 @@ API:
     POST /api/rsu                   body: an RSU bundle .tar.gz (linux/tools/make_rsu_bundle.py);
                                     headers X-Sha256, X-Token, X-No-Reboot: 1. Written to slot
                                     P1 (image, U-Boot, core), then the board reboots into it
+    POST /api/bundle                body: a signed RAUC bundle .raucb (linux/tools/make_bundle.py);
+                                    headers X-Sha256, X-Token. `rauc install` runs detached
+                                    (a GUI release in it restarts this server); 202 at once
+    GET  /api/bundle                that install: running, exit code, its output; rauc present
 """
 import argparse
 import collections
@@ -70,6 +74,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tarfile
 import threading
@@ -452,6 +457,76 @@ class Releases:
 # --------------------------------------------------------------------------
 CORE_BUNDLE_MAX = 32 << 20
 RSU_BUNDLE_MAX = 32 << 20
+RAUC_BUNDLE_MAX = 64 << 20
+
+
+# --------------------------------------------------------------------------
+# RAUC bundles (docs/plan_rauc.md): `rauc install` in its own session
+# --------------------------------------------------------------------------
+class Bundles:
+    """One `rauc install` at a time, in a new session, so it outlives this
+    server: a GUI release in the bundle makes the post-install handler
+    restart the GUI (this process) and then wait for the supervisor's
+    verdict. State in RUN/bundle/: upload.raucb (removed when done), log, rc
+    (written when rauc exits), pid."""
+
+    RAUC = os.environ.get("DE25WEB_RAUC", "/usr/bin/rauc")      # another only in tests
+
+    def __init__(self, run):
+        self.dir = os.path.join(run, "bundle")
+        self.lock = threading.Lock()
+
+    @property
+    def available(self):
+        return os.access(self.RAUC, os.X_OK)
+
+    def _read(self, name):
+        try:
+            with open(os.path.join(self.dir, name)) as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def running(self):
+        pid = self._read("pid")
+        if pid is None or self._read("rc") is not None:
+            return False
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except (ValueError, OSError):
+            return False
+
+    def status(self):
+        rc = self._read("rc")
+        log = self._read("log")
+        return {"rauc": self.available, "running": self.running(),
+                "rc": int(rc) if rc and rc.strip().lstrip("-").isdigit() else None,
+                "log": log[-8000:] if log else None,
+                "started": os.path.getmtime(os.path.join(self.dir, "pid"))
+                if os.path.exists(os.path.join(self.dir, "pid")) else None}
+
+    def start(self, blob):
+        with self.lock:
+            if self.running():
+                raise RuntimeError("a bundle install is already running")
+            os.makedirs(self.dir, exist_ok=True)
+            for n in ("rc", "log", "pid"):
+                if os.path.exists(os.path.join(self.dir, n)):
+                    os.remove(os.path.join(self.dir, n))
+            bundle = os.path.join(self.dir, "upload.raucb")
+            with open(bundle, "wb") as f:
+                f.write(blob)
+            d = self.dir
+            script = (f'{self.RAUC} install "{bundle}" > "{d}/log" 2>&1; rc=$?; '
+                      f'rm -f "{bundle}"; echo $rc > "{d}/rc.new"; mv "{d}/rc.new" "{d}/rc"')
+            proc = subprocess.Popen(["/bin/sh", "-c", script], start_new_session=True,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, close_fds=True)
+            with open(os.path.join(d, "pid"), "w") as f:
+                f.write(f"{proc.pid}\n")
+            # reap it if this server is still around when it ends
+            threading.Thread(target=proc.wait, daemon=True).start()
 
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
                  ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json",
@@ -471,6 +546,7 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
     from urllib.parse import urlparse, parse_qs
 
     static_dir = os.path.join(HERE, "static")
+    bundles = Bundles(run)
     hex_lock = threading.Lock()     # /api/hex read-modify-writes register 22
 
     def restart_soon():
@@ -535,6 +611,8 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     self._json(FpgaClient(run, timeout=30.0).call(op="core" if p == "/api/fpga" else "rsu"))
                 except FpgaUnavailable as e:
                     self._json({"error": str(e)}, 503)
+            elif p == "/api/bundle":
+                self._json(bundles.status())
             elif p == "/api/read":
                 try:
                     reg = int(parse_qs(url.query)["reg"][0])
@@ -603,6 +681,8 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     self._fpga_core(p)
                 elif p == "/api/rsu":
                     self._rsu()
+                elif p == "/api/bundle":
+                    self._bundle()
                 else:
                     self.send_error(404)
             except (KeyError, ValueError, json.JSONDecodeError) as e:
@@ -748,8 +828,32 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
             status = 200 if resp.get("ok") else 409 if resp.get("refused") else 500
             self._json(resp, status)
 
+        def _bundle(self):
+            if not releases.token_ok(self.headers.get("X-Token")):
+                self.close_connection = True        # the upload's body is left unread
+                self._json({"error": "bad or missing X-Token"}, 403)
+                return
+            if not bundles.available:
+                self.close_connection = True
+                self._json({"error": "no rauc on this board (an older image)"}, 501)
+                return
+            if bundles.running():
+                self.close_connection = True
+                self._json({"error": "a bundle install is already running"}, 409)
+                return
+            blob = self._body(limit=RAUC_BUNDLE_MAX)
+            if hashlib.sha256(blob).hexdigest() != self.headers.get("X-Sha256", "").lower():
+                raise ValueError("sha256 does not match the upload")
+            try:
+                bundles.start(blob)
+            except RuntimeError as e:
+                self._json({"error": str(e)}, 409)
+                return
+            self._json({"started": True, "size": len(blob)}, 202)
+
         def log_message(self, fmt, *args):
-            polled = ("/api/events", "/api/board", "/api/version", "/api/control", "/api/fpga", "/api/rsu")
+            polled = ("/api/events", "/api/board", "/api/version", "/api/control", "/api/fpga", "/api/rsu",
+                      "/api/bundle")
             if not (self.command == "GET" and self.path.startswith(polled)):
                 print("%s - %s" % (self.address_string(), fmt % args), flush=True)
 

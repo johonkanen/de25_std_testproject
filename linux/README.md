@@ -23,6 +23,11 @@ Neither upstream tree has a DE25-Standard, so this directory carries them.
 | `dts/socfpga_agilex5_de25_std.dts` | Linux device tree (EMAC0, SD, UART1, I2C1 + RTC, QSPI with the SDM's 400 MHz reference clock, SoC sensors) |
 | `tools/make_sdcard_image.sh`, `tools/alpine_rootfs_config.sh` | the SD card image, without root (`./build.sh sdcard`) |
 | `tools/sd_recover.py`, `tools/tftp_server.py` | write the card from U-Boot over TFTP |
+| `build_rauc.sh` | RAUC 1.15.2, static, for the board and for this PC (`./build.sh rauc`, docker; [plan](../docs/plan_rauc.md)) |
+| `board/rauc/system.conf`, `board/rauc/post-install` | the board's RAUC config (artifact repositories `gui`, `core`) and the handler that gives each artifact to the GUI supervisor or `fpga_access.py` |
+| `tools/rauc_keys.sh` | the development CA and signing key, once, in `~/.de25_rauc_keys` (never in the repo) |
+| `tools/make_bundle.py`, `tools/deploy_bundle.py` | a signed RAUC bundle (`gui`, `core` or both), and its install over HTTP (`POST /api/bundle`) |
+| `tools/rauc_handler_test.py` | `/api/bundle` and the handler against the real supervisor with `--sim` (a stand-in for `rauc install` itself) |
 | `tools/push_to_board.py` | push a file to the running board (`nc`, driven over the console) |
 | `board/eth-watchdog.sh` | bounces eth0 when it passes no traffic (from the DE25-Nano) |
 
@@ -34,6 +39,7 @@ in `build/linux/out/`, images (`.jic`, `sdcard.img.gz`) in `build/images/`.
 ```
 ./build.sh fpga        # HPS-first .sof (FPGA_FIRST=1 for an FPGA-first one)
 ./build.sh linux       # CROSS_TOOLCHAIN=<dir> to use an existing aarch64 toolchain
+./build.sh rauc        # RAUC for the board and the host (docker)
 ./build.sh jic
 ./build.sh sdcard
 ```

@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""
+RAUC post-install handler for the DE25-Standard (docs/plan_rauc.md, step 1).
+
+RAUC has checked the bundle (signature, dm-verity, compatible) and put each
+artifact in its repository under /var/lib/rauc. This hands them to the code
+that already tests and rolls back each kind, so a bundle install behaves
+exactly like the old uploads:
+
+  gui/<name>   a GUI release: packed and given to the running GUI
+               (POST /api/update on localhost), which installs it on test
+               and restarts; the supervisor reverts it unless it is
+               confirmed (deploy_bundle.py, or the GUI page) within its
+               test time. This waits for that outcome.
+  core/<name>  an FPGA core (de25_std.core.rbf + .json): given to
+               fpga_access.py (install_core), which checks it, loads it,
+               checks the board id, variant and build id, and loads the
+               previous core back on any failure.
+
+Only what this bundle carries is activated (its manifest.raucm): RAUC's
+artifact links keep pointing at the last installed contents even after a
+trial rejected them (the Zynq Mini project's lesson). GUI first, then the
+core, so a GUI that knows a new core is running before the core loads.
+Either one already active is skipped. A non-zero exit makes `rauc install`
+fail and print the reason.
+"""
+import configparser
+import gzip
+import hashlib
+import http.client
+import io
+import json
+import os
+import socket
+import sys
+import tarfile
+import time
+
+ARTIFACTS = os.environ.get("RAUC_ARTIFACTS", "/var/lib/rauc")   # another only in tests
+BASE = os.environ.get("DE25WEB_BASE", "/opt/de25web")
+RUN = os.environ.get("DE25WEB_RUN", "/run/de25web")
+PORT = int(os.environ.get("DE25WEB_PORT", "80"))
+TEST_SECONDS = int(os.environ.get("DE25WEB_TEST_SECONDS", "120"))
+CORE_NAME, MANIFEST_NAME = "de25_std.core.rbf", "de25_std.core.json"
+
+
+class Failed(Exception):
+    pass
+
+
+def say(*a):
+    print("post-install:", *a, flush=True)
+
+
+def carried():
+    """{"gui": name, "core": name} for the artifacts in this bundle"""
+    path = os.path.join(os.environ.get("RAUC_BUNDLE_MOUNT_POINT", ""), "manifest.raucm")
+    if not os.path.isfile(path):
+        raise Failed(f"no bundle manifest ({path})")
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(path)
+    out = {}
+    for section in cp.sections():
+        if section.startswith("image.") and "/" in section:
+            repo, name = section[len("image."):].split("/", 1)
+            out[repo] = name
+    return out
+
+
+def pack(tree, gz):
+    """the tree as a reproducible tar (.gz): same contents, same bytes, so
+    the GUI's release name (VERSION + sha) repeats for the same release"""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for root, dirs, files in os.walk(tree):
+            dirs.sort()
+            for name in sorted(files):
+                full = os.path.join(root, name)
+                info = tar.gettarinfo(full, os.path.relpath(full, tree))
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                info.mtime = 0
+                with open(full, "rb") as f:
+                    tar.addfile(info, f)
+    data = raw.getvalue()
+    if not gz:
+        return data
+    out = io.BytesIO()
+    with gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as g:
+        g.write(data)
+    return out.getvalue()
+
+
+def local_http(method, path, body=None, headers=None, timeout=10):
+    c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=timeout)
+    try:
+        c.request(method, path, body, headers or {})
+        r = c.getresponse()
+        data = r.read()
+        try:
+            return r.status, json.loads(data)
+        except ValueError:
+            return r.status, {"raw": data[:200].decode(errors="replace")}
+    finally:
+        c.close()
+
+
+def link(name):
+    p = os.path.join(BASE, name)
+    return os.path.basename(os.readlink(p)) if os.path.islink(p) else None
+
+
+def activate_gui(tree):
+    for f in ("VERSION", "BOARD", "fpga_web.py"):
+        if not os.path.isfile(os.path.join(tree, f)):
+            raise Failed(f"the GUI artifact has no {f}")
+    blob = pack(tree, gz=True)
+    sha = hashlib.sha256(blob).hexdigest()
+    version = open(os.path.join(tree, "VERSION")).read().strip()
+    rel = f"{version}-{sha[:8]}"
+    pending = os.path.join(BASE, "pending")
+    if link("current") == rel and not os.path.exists(pending):
+        say(f"GUI release {rel} is already the confirmed one - nothing to do")
+        return
+    token_path = os.path.join(BASE, "token")
+    headers = {"X-Sha256": sha, "Content-Type": "application/gzip"}
+    if os.path.exists(token_path):
+        headers["X-Token"] = open(token_path).read().strip()
+    say(f"GUI release {rel}: handing it to the GUI")
+    try:
+        status, r = local_http("POST", "/api/update", blob, headers, timeout=60)
+    except (OSError, http.client.HTTPException) as e:
+        raise Failed(f"the GUI does not take the release ({e}) - is it running?") from None
+    if status != 202 or r.get("installed") != rel:
+        raise Failed(f"the GUI refused the release ({status}): {r.get('error', r)}")
+    # on test now: the supervisor keeps it once it is confirmed, reverts it
+    # otherwise (test time, crashes, a reboot)
+    say(f"on test for up to {TEST_SECONDS} s: waiting for its confirmation")
+    deadline = time.time() + TEST_SECONDS + 30
+    while time.time() < deadline:
+        time.sleep(1)
+        on_test = os.path.exists(pending) and open(pending).read().strip() == rel
+        if on_test:
+            continue
+        if link("current") == rel and not os.path.exists(pending):
+            say(f"GUI release {rel} confirmed")
+            return
+        raise Failed(f"GUI release {rel} was reverted by the supervisor "
+                     f"(now running {link('current')})")
+    raise Failed(f"GUI release {rel}: no outcome within {TEST_SECONDS + 30} s")
+
+
+def fpga(req, timeout=300):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(os.path.join(RUN, "fpga.sock"))
+        s.sendall(json.dumps(req).encode() + b"\n")
+        line = s.makefile("rb").readline()
+    finally:
+        s.close()
+    return json.loads(line)
+
+
+def activate_core(tree):
+    for f in (CORE_NAME, MANIFEST_NAME):
+        if not os.path.isfile(os.path.join(tree, f)):
+            raise Failed(f"the core artifact has no {f}")
+    manifest = json.load(open(os.path.join(tree, MANIFEST_NAME)))
+    # fpga_access.py restarts with a new GUI release: wait for it
+    deadline = time.time() + 60
+    while True:
+        try:
+            info = fpga({"op": "core"}, timeout=10)
+            break
+        except (OSError, ValueError):
+            if time.time() > deadline:
+                raise Failed("fpga_access.py does not answer") from None
+            time.sleep(1)
+    installed = info.get("installed") or {}
+    if (installed.get("core_sha256") == manifest.get("core_sha256")
+            and info.get("running_build_id") == manifest.get("build_id")):
+        say(f"FPGA core build {manifest.get('build_id')} is already running - nothing to do")
+        return
+    os.makedirs(RUN, exist_ok=True)
+    bundle = os.path.join(RUN, "rauc-core.tar")
+    with open(bundle, "wb") as f:
+        f.write(pack(tree, gz=False))
+    say(f"FPGA core build {manifest.get('build_id')}: loading it")
+    try:
+        r = fpga({"op": "install_core", "bundle": bundle})
+    finally:
+        os.remove(bundle)
+    if not r.get("ok"):
+        what = "refused" if r.get("refused") else (
+            "failed, previous core loaded back" if r.get("rolled_back") else "failed")
+        raise Failed(f"FPGA core {what}: {r.get('error')}")
+    say(f"FPGA core build {manifest.get('build_id')} runs")
+
+
+def main():
+    try:
+        repos = carried()
+        if not repos:
+            raise Failed("the bundle carries no artifact for this board")
+        for repo in repos:
+            if repo not in ("gui", "core"):
+                raise Failed(f"unknown artifact repository {repo!r}")
+        if "gui" in repos:
+            activate_gui(os.path.join(ARTIFACTS, "gui", repos["gui"]))
+        if "core" in repos:
+            activate_core(os.path.join(ARTIFACTS, "core", repos["core"]))
+    except Failed as e:
+        say("FAILED:", e)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
