@@ -14,6 +14,8 @@ step names the file that does it here. The DE25-Nano repository
 `docs/remote_system_update_plan.md` has the background. The history and
 the measurements are in [plan_upstream_hps_first_webgui.md](plan_upstream_hps_first_webgui.md)
 (Phases B, D, E, F and §5) and [plan_rauc.md](plan_rauc.md) (RAUC, A/B).
+The RAUC part step by step, with every file and the traps we hit:
+[agilex5_rauc_setup.md](agilex5_rauc_setup.md).
 
 ## What you end up with
 
