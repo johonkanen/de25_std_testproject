@@ -7,7 +7,7 @@ Checks the bundle here first (signature against the CA in the key
 directory, compatible), uploads it (POST /api/bundle with its SHA-256 and the
 token), and follows the board's `rauc install` until it ends. A GUI release
 in the bundle goes on test on the board: this checks it the way
-deploy_web.py does (the version answers, the register file answers with the
+the GUI page does (the version answers, the register file answers with the
 board id) and confirms it, which is what lets the install succeed. An FPGA
 core is loaded and checked by the board itself. An image (step 2) goes into
 the application image not running; the board reboots into it, and this
@@ -19,6 +19,7 @@ SDM's fallback.
     python3 linux/tools/deploy_bundle.py --no-confirm        # leave a GUI release on test
     python3 linux/tools/deploy_bundle.py --skip-check X.raucb  # upload without the local check
                                                                # (refusal tests)
+    python3 linux/tools/deploy_bundle.py --status            # what the board runs
 """
 import argparse
 import glob
@@ -32,7 +33,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from deploy_web import request  # noqa: E402
+from board_http import request  # noqa: E402
 from make_bundle import COMPATIBLE, OUT, RAUC  # noqa: E402
 
 
@@ -64,7 +65,7 @@ def get(base, path, timeout=5):
 
 
 def confirm_release(base, before_release):
-    """the GUI release on test: checked and confirmed, as deploy_web.py does.
+    """the GUI release on test: checked (it answers, the board id reads) and confirmed.
     True once confirmed, None while it is not up yet."""
     v = get(base, "/api/version")
     if not v or not v.get("pending") or v.get("release") != v.get("pending") \
@@ -96,21 +97,23 @@ def main():
     ap.add_argument("--skip-check", action="store_true", help="upload without checking the bundle here")
     ap.add_argument("--no-confirm", action="store_true", help="leave a GUI release on test")
     ap.add_argument("--wait", type=float, default=400, help="seconds to wait for the install")
+    ap.add_argument("--status", action="store_true", help="only show what the board runs")
     args = ap.parse_args()
     base = f"http://{args.host}:{args.port}"
 
-    path = args.bundle or max(glob.glob(os.path.join(OUT, "de25_std_*.raucb")),
-                              key=os.path.getmtime, default=None)
-    if not path:
-        sys.exit("no bundle - run make_bundle.py, or give --bundle")
-    parts = set()          # unknown with --skip-check
-    if args.skip_check:
-        print(f">> {os.path.basename(path)} (not checked here)")
-    else:
-        info = local_info(path, args.keys)
-        parts = {info.get(f"RAUC_IMAGE_CLASS_{i}") for i in range(int(info.get("RAUC_MF_IMAGES", "0")))}
-        print(f">> {os.path.basename(path)}: {info.get('RAUC_MF_DESCRIPTION')} "
-              f"(signature ok, {', '.join(sorted(parts))})")
+    path, parts = None, set()          # parts: unknown with --skip-check
+    if not args.status:
+        path = args.bundle or max(glob.glob(os.path.join(OUT, "de25_std_*.raucb")),
+                                  key=os.path.getmtime, default=None)
+        if not path:
+            sys.exit("no bundle - run make_bundle.py, or give --bundle")
+        if args.skip_check:
+            print(f">> {os.path.basename(path)} (not checked here)")
+        else:
+            info = local_info(path, args.keys)
+            parts = {info.get(f"RAUC_IMAGE_CLASS_{i}") for i in range(int(info.get("RAUC_MF_IMAGES", "0")))}
+            print(f">> {os.path.basename(path)}: {info.get('RAUC_MF_DESCRIPTION')} "
+                  f"(signature ok, {', '.join(sorted(parts))})")
 
     # two boards on one LAN: check this is the board the bundle is for
     try:
@@ -118,7 +121,9 @@ def main():
     except (OSError, http.client.HTTPException) as e:
         sys.exit(f"{base} does not answer ({e}) - still booting, or wrong --host?")
     if status != 200 or ver.get("board") != COMPATIBLE:
-        sys.exit(f"{base} is {ver.get('board')!r} ({status}), this bundle is for {COMPATIBLE!r} - wrong --host?")
+        sys.exit(f"{base} is {ver.get('board')!r} ({status}), the bundles here are for {COMPATIBLE!r} - wrong --host?")
+    if args.status:
+        return show_status(base, ver)
     st = get(base, "/api/bundle")
     if st is None or not st.get("rauc"):
         sys.exit(f"{base} has no rauc (an image from before docs/plan_rauc.md step 1)")
@@ -164,6 +169,31 @@ def main():
                 return follow_reboot(base, rsu_before, t0, args.wait)
             return 0
     sys.exit(f"no result within {args.wait:.0f} s")
+
+
+def show_status(base, ver):
+    """the GUI release, the FPGA core, the RSU images, the last bundle install"""
+    print(f">> GUI {ver.get('release')} (previous {ver.get('previous')})"
+          + (f", ON TEST: {ver['pending']}" if ver.get("pending") else ""))
+    core = get(base, "/api/fpga", timeout=30) or {}
+    inst = core.get("installed") or {}
+    print(f">> FPGA core: running build {core.get('running_build_id')}, installed {inst.get('build_id')}")
+    rsu = get(base, "/api/rsu", timeout=30) or {}
+    if rsu.get("rsu"):
+        st = rsu.get("status") or {}
+        fail = int(st.get("fail_image") or "0", 16)
+        print(f">> image {rsu.get('slot')}, {rsu.get('confirm')!r}" + (f", FAILED image {fail:#x}" if fail else ""))
+        for name, img in (rsu.get("images") or {}).items():
+            print(f"   {name}: priority {img.get('priority')}, build {img.get('build_id')}"
+                  + (" - running" if img.get("running") else ""))
+    b = get(base, "/api/bundle") or {}
+    if b.get("rauc"):
+        last = [l for l in (b.get("log") or "").splitlines() if "succeeded" in l or "failed" in l]
+        print(">> last bundle install: " + ("running" if b.get("running") else
+              f"exit {b.get('rc')}" + (f" ({last[-1].strip()})" if last else "") if b.get("rc") is not None else "none"))
+    else:
+        print(">> no rauc on this board")
+    return 0
 
 
 def follow_reboot(base, before, t0, wait):

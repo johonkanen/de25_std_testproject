@@ -28,7 +28,8 @@ Neither upstream tree has a DE25-Standard, so this directory carries them.
 | `board/rauc/bootloader`, `board/rauc/image-hook` | RAUC's boot backend on `rsu_client` (primary/good/bad = RSU slot priorities), and an image bundle's install hook (the QSPI image through `fpga_access.py`) |
 | `tools/make_rootfs_base.sh` | the rootfs base: Alpine minirootfs + python3, e2fsprogs, installed at build time (docker) |
 | `tools/rauc_keys.sh` | the development CA and signing key, once, in `~/.de25_rauc_keys` (never in the repo) |
-| `tools/make_bundle.py`, `tools/deploy_bundle.py` | a signed RAUC bundle (`gui`, `core` or both), and its install over HTTP (`POST /api/bundle`) |
+| `tools/make_bundle.py`, `tools/deploy_bundle.py` | a signed RAUC bundle (`gui`, `core`, `image`), and its install over HTTP (`POST /api/bundle`); `deploy_bundle.py --status` shows what the board runs |
+| `tools/payloads.py`, `tools/board_http.py`, `tools/make_rsu_bundle.py` | what goes into a bundle (a GUI release, a core, a QSPI image), and the early-answer HTTP request |
 | `tools/rauc_backend_test.py` | the boot backend against a stand-in `rsu_client` |
 | `tools/rauc_handler_test.py` | `/api/bundle` and the handler against the real supervisor with `--sim` (a stand-in for `rauc install` itself) |
 | `tools/push_to_board.py` | push a file to the running board (`nc`, driven over the console) |

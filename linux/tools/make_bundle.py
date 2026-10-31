@@ -12,10 +12,10 @@ make_bundle.py - a signed RAUC bundle for the DE25-Standard
 
 Each part is one artifact for the board's repositories (system.conf):
 
-    [image.gui/de25web]   the release deploy_web.py would upload (the three .py,
+    [image.gui/de25web]   a GUI release (payloads.pack_release: the three .py,
                           static/, VERSION with the git state, BOARD)
     [image.core/de25_std] de25_std.core.rbf + de25_std.core.json (make_jic.sh),
-                          checked as deploy_fpga.py checks them
+                          checked as the board checks them (payloads.pack_core)
 
 An image (docs/plan_rauc.md step 2, A/B) goes into the slot group that is
 not running, in this order:
@@ -46,8 +46,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from deploy_fpga import CORE_NAME, pack_bundle  # noqa: E402
-from deploy_web import pack_release  # noqa: E402
+from payloads import CORE_NAME, pack_core, pack_release  # noqa: E402
 import make_rsu_bundle  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -76,7 +75,7 @@ def make(parts, core_path, manifest_path, keys, out=None):
         desc.append(f"GUI {gui_version}")
         version.append(gui_version.replace("+", "-"))
     if "core" in parts:
-        blob, manifest = pack_bundle(core_path, manifest_path)
+        blob, manifest = pack_core(core_path, manifest_path)
         tars["core"] = gzip.decompress(blob)
         built = time.strftime("%Y-%m-%d %H:%M", time.localtime(manifest["build_id"]))
         desc.append(f"core build {manifest['build_id']} ({built})")

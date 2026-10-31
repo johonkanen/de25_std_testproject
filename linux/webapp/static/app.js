@@ -176,11 +176,9 @@ function buildPanels() {
     });
     blanks.appendChild(b);
   }
-  $("update-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
+  $("update-form").addEventListener("submit", (e) => { e.preventDefault(); installBundle(); });
   $("rollback").addEventListener("click", rollback);
-  $("core-form").addEventListener("submit", (e) => { e.preventDefault(); loadCore(); });
   $("core-reload").addEventListener("click", reloadCore);
-  $("rsu-form").addEventListener("submit", (e) => { e.preventDefault(); uploadRsu(); });
 }
 
 function renderPanels(s) {
@@ -334,51 +332,33 @@ async function loadCoreInfo() {
   $("core-prev").textContent = c.previous ? manifestName(c.previous) : "-";
   $("core-mismatch").hidden = !(c.installed && c.installed.build_id && c.running_build_id !== null
                                 && c.running_build_id !== c.installed.build_id);
-  $("core-force").checked = !c.installed;
   return c;
-}
-
-function coreBusy(busy) {
-  $("core-form").querySelectorAll("input, button").forEach((el) => { el.disabled = busy; });
-}
-
-async function loadCore() {
-  const file = $("core-file").files[0];
-  if (!file) { $("core-msg").textContent = "Pick a core bundle .tar.gz first (deploy_fpga.py --pack-only)."; return; }
-  const buf = await file.arrayBuffer();
-  const sha = await sha256hex(buf);
-  const headers = { "X-Sha256": sha, "X-Token": $("core-token").value };
-  if ($("core-force").checked) headers["X-Force"] = "1";
-  $("core-msg").textContent = `Loading ${file.name} - the board pauses for about 2 s...`;
-  coreBusy(true);
-  try {
-    const r = await api("/api/fpga", new Blob([buf]), headers);
-    $("core-msg").textContent = `Build ${r.build_id} running (${r.seconds} s); SD card copy ` +
-      (r.boot && r.boot.written ? "written." : "NOT written: " + ((r.boot && r.boot.error) || "?"));
-  } catch (e) {
-    $("core-msg").textContent = "Core not loaded: " + e.message;
-  } finally {
-    coreBusy(false);
-    loadCoreInfo().catch(() => {});
-  }
 }
 
 async function reloadCore() {
   $("core-msg").textContent = "Reloading the installed core...";
-  coreBusy(true);
+  $("core-reload").disabled = true;
   try {
-    const r = await api("/api/fpga/reload", {}, { "X-Token": $("core-token").value });
+    const r = await api("/api/fpga/reload", {}, { "X-Token": $("token").value });
     $("core-msg").textContent = `Reloaded build ${r.build_id} in ${r.seconds} s.`;
   } catch (e) {
-    $("core-msg").textContent = "Reload failed: " + e.message;
+    $("core-msg").textContent = "Reload failed: " + e.message + " (the token is in the Update card)";
   } finally {
-    coreBusy(false);
+    $("core-reload").disabled = false;
     loadCoreInfo().catch(() => {});
   }
 }
 
 // ---------------------------------------------------------------- FPGA image (RSU)
-const IMAGES = { 0x220000: "factory image", 0x400000: "P1" };
+const IMAGES = { 0x220000: "factory image", 0x400000: "P1", 0x700000: "P2" };
+
+function imageLine(img, name) {
+  if (!img) return "-";
+  if (img.priority === "[disabled]" || img.priority === null)
+    return "nothing bootable (empty, erased or disabled)";
+  return (img.build_id ? buildName(img.build_id) : "written by the .jic")
+    + (img.running ? " - running" : "") + ` (priority ${img.priority})`;
+}
 
 async function loadRsuInfo() {
   const r = await api("/api/rsu");
@@ -395,33 +375,16 @@ async function loadRsuInfo() {
   pill.textContent = c.startsWith("confirmed") ? "confirmed" : c.startsWith("factory") ? "fallback image"
     : c.startsWith("waiting") ? "on test" : c.startsWith("failed") ? "not healthy" : (c || "-");
   pill.className = "pill" + (c.startsWith("confirmed") ? "" : " pill-warn");
-  $("rsu-p1").textContent = r.p1_priority === "[disabled]" ? "nothing bootable (erased or disabled)"
-    : r.installed ? buildName(r.installed.build_id) + (r.installed.git ? ", git " + r.installed.git : "")
-    : "(written by the .jic)";
+  const images = r.images || {};
+  $("rsu-p1").textContent = imageLine(images.P1, "P1");
+  $("rsu-p2-row").hidden = !images.P2;      // no P2 before the A/B layout
+  $("rsu-p2").textContent = imageLine(images.P2, "P2");
   $("rsu-fail").hidden = !fail;
   $("rsu-fail").textContent = fail ? `${IMAGES[fail] || "0x" + fail.toString(16)} failed (state ${st.state}) - the SDM fell back` : "";
   return r;
 }
 
-async function uploadRsu() {
-  const file = $("rsu-file").files[0];
-  if (!file) { $("rsu-msg").textContent = "Pick an RSU bundle .tar.gz first (make_rsu_bundle.py)."; return; }
-  const buf = await file.arrayBuffer();
-  const sha = await sha256hex(buf);
-  $("rsu-msg").textContent = `Writing ${file.name} to P1 - this takes a few minutes, then the board reboots...`;
-  $("rsu-form").querySelectorAll("input, button").forEach((el) => { el.disabled = true; });
-  try {
-    const r = await api("/api/rsu", new Blob([buf]), { "X-Sha256": sha, "X-Token": $("rsu-token").value });
-    $("rsu-msg").textContent = `Build ${r.build_id} written in ${r.seconds} s; rebooting into it. ` +
-      "The page comes back once the board is up; the image counts when it shows \"confirmed\".";
-    waitForBoard();
-  } catch (e) {
-    $("rsu-msg").textContent = "Update not written: " + e.message;
-    $("rsu-form").querySelectorAll("input, button").forEach((el) => { el.disabled = false; });
-  }
-}
-
-function waitForBoard() {
+function waitForBoard(msg) {
   // the board reboots: wait for it to go away, then reload when it answers
   let down = false;
   const t0 = Date.now();
@@ -431,6 +394,7 @@ function waitForBoard() {
       if (down) { location.reload(); return; }
     } catch (e) { down = true; }
     if (Date.now() - t0 < 600000) setTimeout(tick, 3000);
+    else msg.textContent = "The board did not come back within 10 minutes.";
   };
   setTimeout(tick, 3000);
 }
@@ -442,54 +406,38 @@ async function loadVersion() {
   $("prev").textContent = release.previous || "-";
   $("pending").hidden = !release.pending;
   const managed = release.managed;
-  $("update-form").querySelectorAll("input, button").forEach((el) => { el.disabled = !managed; });
-  if (!managed) $("update-msg").textContent = "Not an installed release - updates are off (development run).";
-  // This page loaded and read the board: the release on test works. Keep it.
+  $("rollback").disabled = !managed;
+  if (!managed) $("release-msg").textContent = "Not an installed release - updates are off (development run).";
+  // This page loaded and read the board: the release on test works. Keep it
+  // (a GUI release from a bundle: the install on the board waits for this).
   if (managed && release.pending && release.pending === release.release) {
     // the server only confirms once all three processes answer; retry a while
     for (let i = 0; i < 20; i++) {
       try {
         await api("/api/update/confirm", {});
-        $("update-msg").textContent = `Release ${release.release} confirmed.`;
+        $("release-msg").textContent = `Release ${release.release} confirmed.`;
         $("pending").hidden = true;
         return;
       } catch (e) {
-        $("update-msg").textContent = "Not confirmed yet: " + e.message;
+        $("release-msg").textContent = "Not confirmed yet: " + e.message;
         await new Promise((r) => setTimeout(r, 3000));
       }
     }
   }
 }
 
-async function upload() {
-  const file = $("update-file").files[0];
-  if (!file) { $("update-msg").textContent = "Pick a release .tar.gz first."; return; }
-  const buf = await file.arrayBuffer();
-  const sha = await sha256hex(buf);
-  $("update-msg").textContent = `Uploading ${file.name} (${buf.byteLength} bytes)...`;
-  try {
-    const r = await api("/api/update", new Blob([buf]), {
-      "X-Sha256": sha, "X-Token": $("update-token").value,
-    });
-    $("update-msg").textContent = `Installed ${r.installed}; restarting...`;
-    waitForRestart();
-  } catch (e) {
-    $("update-msg").textContent = "Update refused: " + e.message;
-  }
-}
-
 async function rollback() {
   try {
-    const r = await api("/api/update/rollback", {}, { "X-Token": $("update-token").value });
-    $("update-msg").textContent = `Rolling back to ${r.current}...`;
+    const r = await api("/api/update/rollback", {}, { "X-Token": $("token").value });
+    $("release-msg").textContent = `Rolling back to ${r.current}...`;
     waitForRestart();
   } catch (e) {
-    $("update-msg").textContent = "Rollback refused: " + e.message;
+    $("release-msg").textContent = "Rollback refused: " + e.message + " (the token is in the Update card)";
   }
 }
 
 function waitForRestart() {
-  // the server restarts into the new release; reload once it answers again
+  // the server restarts into another release; reload once it answers again
   const t0 = Date.now();
   const tick = async () => {
     try {
@@ -497,7 +445,69 @@ function waitForRestart() {
       if (v.release !== release.release) { location.reload(); return; }
     } catch (e) { /* still restarting */ }
     if (Date.now() - t0 < 60000) setTimeout(tick, 1000);
-    else $("update-msg").textContent = "The board did not come back within a minute.";
+    else $("release-msg").textContent = "The board did not come back within a minute.";
+  };
+  setTimeout(tick, 1500);
+}
+
+// ---------------------------------------------------------------- RAUC bundles
+// POST /api/bundle starts `rauc install` on the board and answers at once;
+// GET /api/bundle follows it. A GUI release in the bundle restarts the
+// server: this page then reloads, and the new page confirms the release
+// (loadVersion), which is what lets the install finish. An image bundle
+// ends in a reboot into the other application image.
+async function installBundle() {
+  const file = $("update-file").files[0];
+  const msg = $("update-msg"), log = $("update-log");
+  if (!file) { msg.textContent = "Pick a .raucb bundle first (linux/tools/make_bundle.py)."; return; }
+  const form = $("update-form").querySelectorAll("input, button");
+  form.forEach((el) => { el.disabled = true; });
+  try {
+    msg.textContent = `Checking ${file.name} (${(file.size / 1e6).toFixed(1)} MB)...`;
+    const buf = await file.arrayBuffer();
+    const sha = await sha256hex(buf);
+    msg.textContent = `Uploading ${file.name}...`;
+    await api("/api/bundle", new Blob([buf]), { "X-Sha256": sha, "X-Token": $("token").value });
+    msg.textContent = "Installing - the board checks the signature, then writes it.";
+    followBundle(release && release.release);
+  } catch (e) {
+    msg.textContent = "Not installed: " + e.message;
+    form.forEach((el) => { el.disabled = false; });
+  }
+}
+
+function followBundle(before) {
+  const msg = $("update-msg"), log = $("update-log");
+  const tick = async () => {
+    let b;
+    try { b = await api("/api/bundle"); } catch (e) { setTimeout(tick, 2000); return; }   // restarting
+    const lines = (b.log || "").split("\n").filter((l) => l && !/^\s+\d+% /.test(l));
+    log.hidden = !lines.length;
+    log.textContent = lines.slice(-8).join("\n");
+    if (b.rc === null || b.running) {
+      // a GUI release from the bundle is running: reload, the new page confirms it
+      try {
+        const v = await api("/api/version");
+        if (v.pending && v.release === v.pending && v.release !== before) { location.reload(); return; }
+      } catch (e) { /* restarting */ }
+      setTimeout(tick, 2000);
+      return;
+    }
+    if (b.rc !== 0) {
+      msg.textContent = `rauc install failed (exit ${b.rc}) - the board keeps what it had.`;
+      $("update-form").querySelectorAll("input, button").forEach((el) => { el.disabled = false; });
+      return;
+    }
+    if (b.reboot) {
+      msg.textContent = "Installed; the board reboots into the new image. The page comes back once it is up; "
+        + "the image counts when it shows \"confirmed\".";
+      waitForBoard(msg);
+      return;
+    }
+    msg.textContent = "Installed.";
+    $("update-form").querySelectorAll("input, button").forEach((el) => { el.disabled = false; });
+    loadCoreInfo().catch(() => {});
+    loadVersion().catch(() => {});
   };
   setTimeout(tick, 1500);
 }
@@ -774,7 +784,7 @@ drawPlots();
 buildPanels();
 buildLedBar();
 loadBoard().then(connect);
-loadVersion().catch((e) => { $("update-msg").textContent = "Version unknown: " + e.message; });
+loadVersion().catch((e) => { $("release-msg").textContent = "Version unknown: " + e.message; });
 loadCoreInfo().catch((e) => { $("core-msg").textContent = "Core unknown: " + e.message; });
-loadRsuInfo().catch((e) => { $("rsu-msg").textContent = "RSU state unknown: " + e.message; });
+loadRsuInfo().catch((e) => { $("rsu-image").textContent = "unknown: " + e.message; });
 setInterval(() => { if (!$("rsu-card").hidden) loadRsuInfo().catch(() => {}); }, 15000);

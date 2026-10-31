@@ -47,21 +47,15 @@ API:
     POST /api/fan       {"rpm": 1500..6000}  loop in auto/manual: becomes manual at this speed
     GET  /api/read?reg=N, POST /api/write {"reg": N, "value": V}   raw access
     GET  /api/version               GUI release, previous, whether on test
-    POST /api/update                body: a release .tar.gz; headers X-Sha256, X-Token;
-                                    refused unless its BOARD file names this board
+    POST /api/update                localhost only (the RAUC post-install handler): a release
+                                    .tar.gz; headers X-Sha256, X-Token; refused unless its
+                                    BOARD file names this board. From the network: a bundle
     POST /api/update/confirm        keep the release on test (only when all three answer)
     POST /api/update/rollback       back to the previous release (X-Token)
     GET  /api/fpga                  the FPGA core: running build id, installed, previous
-    POST /api/fpga                  body: a core bundle .tar.gz (linux/tools/deploy_fpga.py);
-                                    headers X-Sha256, X-Token, X-Force: 1 (no installed
-                                    manifest). fpga_access.py checks it, loads it (~2 s,
-                                    the registers pause), rolls back if it fails
     POST /api/fpga/reload           load the installed core again (X-Token)
     GET  /api/rsu                   remote system update: running/failed image, boot
-                                    confirmation, the image installed in P1
-    POST /api/rsu                   body: an RSU bundle .tar.gz (linux/tools/make_rsu_bundle.py);
-                                    headers X-Sha256, X-Token, X-No-Reboot: 1. Written to slot
-                                    P1 (image, U-Boot, core), then the board reboots into it
+                                    confirmation, each application image (P1, P2)
     POST /api/bundle                body: a signed RAUC bundle .raucb (linux/tools/make_bundle.py);
                                     headers X-Sha256, X-Token. `rauc install` runs detached
                                     (a GUI release in it restarts this server); 202 at once
@@ -481,8 +475,6 @@ class Releases:
 # --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
-CORE_BUNDLE_MAX = 32 << 20
-RSU_BUNDLE_MAX = 32 << 20
 RAUC_BUNDLE_MAX = 512 << 20          # an image bundle carries the rootfs (step 2)
 
 
@@ -742,10 +734,8 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     self._json({"reg": reg, "value": board.read(reg)})
                 elif p.startswith("/api/update"):
                     self._update(p)
-                elif p in ("/api/fpga", "/api/fpga/reload"):
-                    self._fpga_core(p)
-                elif p == "/api/rsu":
-                    self._rsu()
+                elif p == "/api/fpga/reload":
+                    self._reload_core()
                 elif p == "/api/bundle":
                     self._bundle()
                 else:
@@ -835,6 +825,13 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                 self.close_connection = True        # an upload's body is left unread
                 self._json({"error": "bad or missing X-Token"}, 403)
                 return
+            if p == "/api/update" and not self._local():
+                # updates come as signed RAUC bundles (POST /api/bundle); this
+                # stays for the bundle's post-install handler, on the board
+                self.close_connection = True
+                self._json({"error": "send a signed RAUC bundle to /api/bundle "
+                                     "(linux/tools/make_bundle.py gui, deploy_bundle.py)"}, 403)
+                return
             if p == "/api/update":
                 blob = self._body(limit=8 << 20)
                 rel = releases.install(blob, self.headers.get("X-Sha256", ""))
@@ -847,51 +844,17 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
             else:
                 self.send_error(404)
 
-        def _fpga_core(self, p):
+        def _local(self):
+            return self.client_address[0] in ("127.0.0.1", "::1")
+
+        def _reload_core(self):
+            self._body()
             if not releases.token_ok(self.headers.get("X-Token")):
-                self.close_connection = True        # an upload's body is left unread
                 self._json({"error": "bad or missing X-Token"}, 403)
                 return
             # a load takes ~2 s plus the checks: its own client, a longer wait
-            slow = FpgaClient(run, timeout=120.0)
-            if p == "/api/fpga/reload":
-                self._body()
-                resp = slow.call_raw(op="reload")
-                self._json(resp, 200 if resp.get("ok") else 500)
-                return
-            blob = self._body(limit=CORE_BUNDLE_MAX)
-            if hashlib.sha256(blob).hexdigest() != self.headers.get("X-Sha256", "").lower():
-                raise ValueError("sha256 does not match the upload")
-            bundle = os.path.join(run, "core-upload.tar.gz")
-            with open(bundle, "wb") as f:
-                f.write(blob)
-            try:
-                resp = slow.call_raw(op="install_core", bundle=bundle,
-                                      force=self.headers.get("X-Force") == "1")
-            finally:
-                os.remove(bundle)
-            status = 200 if resp.get("ok") else 409 if resp.get("refused") else 500
-            self._json(resp, status)
-
-        def _rsu(self):
-            if not releases.token_ok(self.headers.get("X-Token")):
-                self.close_connection = True        # the upload's body is left unread
-                self._json({"error": "bad or missing X-Token"}, 403)
-                return
-            blob = self._body(limit=RSU_BUNDLE_MAX)
-            if hashlib.sha256(blob).hexdigest() != self.headers.get("X-Sha256", "").lower():
-                raise ValueError("sha256 does not match the upload")
-            bundle = os.path.join(run, "rsu-upload.tar.gz")
-            with open(bundle, "wb") as f:
-                f.write(blob)
-            try:
-                # erase + write of three QSPI partitions: minutes, not seconds
-                resp = FpgaClient(run, timeout=900.0).call_raw(
-                    op="install_rsu", bundle=bundle, reboot=self.headers.get("X-No-Reboot") != "1")
-            finally:
-                os.remove(bundle)
-            status = 200 if resp.get("ok") else 409 if resp.get("refused") else 500
-            self._json(resp, status)
+            resp = FpgaClient(run, timeout=120.0).call_raw(op="reload")
+            self._json(resp, 200 if resp.get("ok") else 500)
 
         def _bundle(self):
             if not releases.token_ok(self.headers.get("X-Token")):

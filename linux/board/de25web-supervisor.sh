@@ -26,7 +26,7 @@
 #     pending file means the test never finished).
 # Confirmation is POST /api/update/confirm - the GUI page does it once it
 # has loaded and read the board, and the server refuses it unless the FPGA
-# access and the temperature control processes answer; deploy_web.py
+# access and the temperature control processes answer; deploy_bundle.py
 # confirms after its own checks.
 #
 # The fan while processes come and go: the MAX6650 holds the last speed. A

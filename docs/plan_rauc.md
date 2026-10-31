@@ -173,7 +173,7 @@ Done when, on the board (needs someone at the power switch):
   1 GB per slot is plenty).
 - Production keys: the development CA lives on the build PC.
 - Retire the old endpoints and tools after step 2, or keep the token
-  endpoints for boards on old images.
+  endpoints for boards on old images: retired 2026-10-31 (below).
 
 ## Status
 
@@ -197,7 +197,16 @@ Done when, on the board (needs someone at the power switch):
 
 
 Still open in step 1:
-- the old endpoints and tools: retire them, or keep them for old images.
+- the old endpoints and tools: retired 2026-10-31. `POST /api/fpga` and
+  `POST /api/rsu` are gone; `POST /api/update` answers only on localhost
+  (the post-install handler) and refuses the network with a pointer to
+  `/api/bundle`; `deploy_web.py`, `deploy_fpga.py`, `deploy_rsu.py` and
+  `rsu_refusal_test.py` are deleted (their packing code is in
+  `payloads.py`, the early-answer request in `board_http.py`,
+  `deploy_rsu.py --status` is `deploy_bundle.py --status`); the page's
+  three upload cards are one Update card for `.raucb` files.
+  `rauc_handler_test.py`'s `refusals` checks the old uploads from a
+  non-loopback address.
 
 Board findings in step 2 (all fixed):
 - A GUI release installed seconds before the HPS stopped (the JTAG

@@ -113,46 +113,44 @@
       <p class="sub">Running build <code id="core-build">-</code> <span id="core-mismatch" class="pill pill-warn" hidden>not the installed one</span></p>
       <p class="sub">Installed: <code id="core-installed">-</code></p>
       <p class="sub">Previous: <code id="core-prev">-</code></p>
-      <form id="core-form" class="update">
-        <input id="core-file" type="file" accept=".tar.gz,.tgz" aria-label="Core bundle">
-        <input id="core-token" type="password" placeholder="token" autocomplete="current-password" aria-label="Core update token">
-        <label class="sub"><input id="core-force" type="checkbox"> force (the board's core has no manifest)</label>
-        <div class="row">
-          <button type="submit">Load core</button>
-          <button type="button" id="core-reload" class="secondary">Reload</button>
-        </div>
-      </form>
+      <div class="row">
+        <button type="button" id="core-reload" class="secondary">Reload</button>
+      </div>
       <p id="core-msg" class="sub" role="status"></p>
     </section>
 
     <section class="card" id="rsu-card">
       <h2>FPGA image</h2>
       <p class="sub">Running <code id="rsu-image">-</code> <span id="rsu-confirm" class="pill">-</span></p>
-      <p class="sub">P1 holds: <code id="rsu-p1">-</code></p>
+      <p class="sub">P1: <code id="rsu-p1">-</code></p>
+      <p class="sub" id="rsu-p2-row">P2: <code id="rsu-p2">-</code></p>
       <p class="sub" id="rsu-fail" hidden></p>
-      <form id="rsu-form" class="update">
-        <input id="rsu-file" type="file" accept=".tar.gz,.tgz" aria-label="RSU bundle">
-        <input id="rsu-token" type="password" placeholder="token" autocomplete="current-password" aria-label="RSU update token">
-        <div class="row">
-          <button type="submit">Write P1 and reboot</button>
-        </div>
-      </form>
-      <p id="rsu-msg" class="sub" role="status"></p>
     </section>
 
     <section class="card">
       <h2>GUI release</h2>
       <p class="sub">Running <code id="ver">-</code> <span id="pending" class="pill pill-warn" hidden>on test</span></p>
       <p class="sub">Previous: <code id="prev">-</code></p>
+      <div class="row">
+        <button type="button" id="rollback" class="secondary">Roll back</button>
+      </div>
+      <p id="release-msg" class="sub" role="status"></p>
+    </section>
+
+    <section class="card" id="update-card">
+      <h2>Update</h2>
+      <p class="sub">A signed RAUC bundle (<code>make_bundle.py gui|core|image</code>): a GUI release
+        and an FPGA core take effect at once; an image goes into the other application image and
+        the board reboots into it.</p>
       <form id="update-form" class="update">
-        <input id="update-file" type="file" accept=".tar.gz,.tgz" aria-label="Release archive">
-        <input id="update-token" type="password" placeholder="token" autocomplete="current-password" aria-label="Update token">
+        <input id="update-file" type="file" accept=".raucb" aria-label="RAUC bundle">
+        <input id="token" type="password" placeholder="token" autocomplete="current-password" aria-label="Update token">
         <div class="row">
-          <button type="submit">Upload</button>
-          <button type="button" id="rollback" class="secondary">Roll back</button>
+          <button type="submit">Install</button>
         </div>
       </form>
       <p id="update-msg" class="sub" role="status"></p>
+      <pre id="update-log" class="sub" hidden></pre>
     </section>
   </aside>
 </main>

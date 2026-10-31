@@ -30,7 +30,7 @@
 # ROOTFS_MB (512, the rootfs file system - RAUC grows it to the partition),
 # DATA_MB (512 - grow it on the board), BOARD_IP, BOARD_GW, ALPINE_VERSION,
 # DE25WEB_TOKEN_FILE (the web GUI's update token; default
-# ~/.de25web_token_std when it exists - deploy_web.py's - else a new one),
+# ~/.de25web_token_std when it exists - deploy_bundle.py's - else a new one),
 # DE25_MAC_FILE (eth0's MAC; default ~/.de25_std_mac, written on the first
 # build).
 set -euo pipefail
@@ -173,7 +173,7 @@ if [[ -n "${TOKEN_FILE}" ]]; then
     echo "  web GUI update token: kept from ${TOKEN_FILE}"
 else
     echo "  web GUI update token: new, in ${IMAGES}/de25web_token - copy it to"
-    echo "  ~/.de25web_token_std for deploy_web.py once this card is in use"
+    echo "  ~/.de25web_token_std for deploy_bundle.py once this card is in use"
 fi
 echo
 echo "  write it: python3 linux/tools/sd_recover.py   (U-Boot + TFTP)"

@@ -3,7 +3,8 @@
 install_webapp.py - one-time install of the web GUI on a running
 DE25-Standard (Alpine rootfs), for a card written before the image carried
 the GUI (make_sdcard_image.sh installs it too). After this, GUI updates go
-over HTTP: deploy_web.py, or the GUI's own "GUI release" panel.
+over HTTP as signed RAUC bundles: make_bundle.py gui + deploy_bundle.py,
+or the GUI's own "Update" panel.
 
 Driven over the HPS UART1 serial console (the board has no ssh): it
 
@@ -34,7 +35,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from deploy_web import pack_release                      # noqa: E402
+from payloads import pack_release                         # noqa: E402
 
 try:
     import serial
@@ -162,7 +163,7 @@ def main():
         time.sleep(1)
         try:
             print(">> answering:", urllib.request.urlopen(url, timeout=3).read().decode())
-            print(f">> GUI: http://{args.board_ip}/   updates: python3 linux/tools/deploy_web.py")
+            print(f">> GUI: http://{args.board_ip}/   updates: make_bundle.py gui + deploy_bundle.py")
             return 0
         except OSError:
             pass

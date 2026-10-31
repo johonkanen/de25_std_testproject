@@ -164,7 +164,7 @@ print("   release", rel)
 PYEOF
 find "${DATA}/de25web" -name __pycache__ -prune -exec rm -rf {} +
 # the update token: DE25WEB_TOKEN_FILE keeps an existing one (a re-imaged
-# card then still takes deploy_web.py), else a new one
+# card then still takes the same uploads), else a new one
 if [[ -n "${DE25WEB_TOKEN_FILE:-}" && -s "${DE25WEB_TOKEN_FILE}" ]]; then
     ( umask 077; tr -d ' \n' < "${DE25WEB_TOKEN_FILE}" > "${DATA}/de25web/token" )
 elif [[ ! -f "${DATA}/de25web/token" ]]; then

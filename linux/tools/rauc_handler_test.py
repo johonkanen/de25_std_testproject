@@ -21,7 +21,8 @@ Cases (each from a fresh layout with one confirmed release):
                      the same bundle again -> "already", exit 0
     gui_unconfirmed  never confirmed: the supervisor reverts -> exit 1
     refusals         no token 403, wrong SHA 400, a second install while one
-                     runs 409, no rauc on the board 501 (another server)
+                     runs 409, no rauc on the board 501; the old uploads from
+                     the network: /api/update 403, /api/fpga and /api/rsu gone
     core_sim         a core bundle to fpga_access.py --sim: refused without an
                      installed manifest (exit 1); loaded over one of the same
                      periphery (exit 0, the old one kept as previous); again:
@@ -47,6 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import supervisor_test as st                                 # noqa: E402
 from make_bundle import RAUC, make                           # noqa: E402
+from board_http import request as board_request             # noqa: E402
 
 HANDLER = os.path.normpath(os.path.join(HERE, "..", "board", "rauc", "post-install"))
 KEYS = os.environ.get("RAUC_KEYS", os.path.expanduser("~/.de25_rauc_keys"))
@@ -177,6 +179,22 @@ def case_refusals(sup, first):
     assert status == 409 and "already running" in r.get("error", ""), f"second: {status} {r}"
     # let the first one end (unconfirmed: reverted) before the next case
     wait_rc(st.TEST_SECONDS + 60)
+    # the old upload endpoint from the network: refused, pointed at bundles
+    # (the test server listens on every address; this PC's own LAN address
+    # is not loopback)
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.connect(("192.0.2.1", 9))             # no packet sent: picks the outgoing address
+    lan = probe.getsockname()[0]
+    probe.close()
+    if not lan.startswith("127."):
+        rel = st.release()
+        status, r = board_request(f"http://{lan}:{st.PORT}/api/update", rel,
+                                  {"X-Sha256": hashlib.sha256(rel).hexdigest(), "X-Token": st.TOKEN})
+        assert status == 403 and "/api/bundle" in r.get("error", ""), f"/api/update from {lan}: {status} {r}"
+        for path in ("/api/fpga", "/api/rsu"):
+            status, r = board_request(f"http://{lan}:{st.PORT}{path}", b"x" * 100, {"X-Token": st.TOKEN})
+            assert status in (404, 405), f"POST {path} from {lan}: {status} {r}"
     # a board without rauc (an older image): 501
     with open(FAKE, "w") as f:
         f.write("")

@@ -79,18 +79,19 @@ back, and fan leases are extended by the pause. `/usr/sbin/fpga-reload`
 on the console goes through it when the GUI runs, and stops everything
 under `/opt/de25web` around the load when it does not.
 
-Op `install_core` (`POST /api/fpga`) checks a bundle (core +
-`de25_std.core.json` from `linux/make_jic.sh`: size, SHA-256, board
-`de25-std`, the same periphery hash as the installed core), keeps the old
-core and loads it back if the new one fails, and writes a good one to the
-SD card's FAT partition too. A bad bundle is refused (409) before
-anything is touched. The RSU code (`/api/rsu`, a core per QSPI image) is
-there but dormant until plan Phase F gives this board an RSU flash layout.
+Op `install_core` (a core from a RAUC bundle, through the post-install
+handler) checks the core and `de25_std.core.json` from `linux/make_jic.sh`
+(size, SHA-256, board `de25-std`, the same periphery hash as the installed
+core), keeps the old core and loads it back if the new one fails, and
+writes a good one to the SD card's FAT partition too. A bad core is refused
+before anything is touched. Op `install_rsu` writes a whole image into an
+application slot (an image bundle's install hook; never the running one),
+and each QSPI image has its own core (`/lib/firmware/rsu/<slot>`, on
+`/data`).
 
 ```bash
-python3 linux/tools/deploy_fpga.py                  # build/images' core, to 192.168.1.223
-python3 linux/tools/deploy_fpga.py --pack-only core.tar.gz   # a bundle for the GUI's "FPGA core" card
-python3 linux/tools/deploy_fpga.py --reload
+python3 linux/tools/make_bundle.py core && python3 linux/tools/deploy_bundle.py
+curl -X POST -H "X-Token: $(cat ~/.de25web_token_std)" http://192.168.1.223/api/fpga/reload
 ```
 
 A core only fits the first stage in QSPI of a build with the same pins,
@@ -154,12 +155,13 @@ its own: the lease is the only net when the loop dies.
 | `temp_control.py` | the temperature loop: hwmon, PI, `control.sock`, `control.json` |
 | `static/` | `index.html`, `app.js`, `style.css`, `board.svg` (the DE25-Standard, after the user manual's board photo) |
 | `VERSION` | the GUI's version; releases add the git state (`1.0.0+a1b5e2b`) |
-| `BOARD` | `de25-std`: the board a release is for. `/api/update` refuses a release for another board (a DE25-Nano release has no `BOARD`), and `deploy_web.py` checks the board before it uploads |
+| `BOARD` | `de25-std`: the board a release is for. `/api/update` refuses a release for another board (a DE25-Nano release has no `BOARD`); a bundle for another board fails RAUC's `compatible` check first |
 | `../board/de25web-supervisor.sh` | runs the three processes on the board and reverts a bad release - installed once, never part of a release |
 | `../tools/install_webapp.py` | one-time install on a running board, over the serial console |
-| `../tools/deploy_web.py` | an update over HTTP: pack, upload, wait, check, confirm |
-| `../tools/deploy_fpga.py` | a new FPGA core over HTTP: bundle (core + manifest), board and periphery check, upload, check the build id |
-| `../tools/supervisor_test.py` | the release cases (good, two updates, no confirmation, crash, restart during the test, rollback onto a broken one, wrong board) against the real supervisor under busybox `sh` with `--sim` |
+| `../tools/make_bundle.py`, `../tools/deploy_bundle.py` | a signed RAUC bundle (`gui`, `core`, `image`) and its install over HTTP: upload, follow, confirm a GUI release, follow an image's reboot ([../../docs/plan_rauc.md](../../docs/plan_rauc.md)) |
+| `../tools/payloads.py`, `../tools/board_http.py` | what goes into a bundle (a GUI release, a core), and the early-answer HTTP request |
+| `../tools/supervisor_test.py` | the release cases (good, two updates, no confirmation, crash, restart during the test, rollback onto a broken one, wrong board, files lost in a power cut) against the real supervisor under busybox `sh` with `--sim` |
+| `../tools/rauc_handler_test.py` | `/api/bundle` and the RAUC post-install handler against the same supervisor (a stand-in for `rauc install`) |
 | `../tools/gui_test.py` | drives the page in headless Chromium: every blinker, an LED click, the HEX card, the loop, the fan slider, `--reload-core`, screenshots |
 
 ## Install (once)
@@ -167,10 +169,10 @@ its own: the lease is the only net when the loop dies.
 Needs the Alpine rootfs ([../README.md](../README.md)) and an FPGA core with
 the register file v2 (build id, blinkers, HEX). Either:
 
-- **a new SD card**: `./build.sh sdcard` installs the GUI too
-  (`alpine_rootfs_config.sh`); the first boot with network runs
-  `apk add python3`. The update token is `~/.de25web_token_std` when that
-  exists (a re-imaged card still takes `deploy_web.py`), else a new one in
+- **a new SD card**: `./build.sh sdcard` installs the GUI too, on the
+  data partition (`alpine_rootfs_config.sh`; python3 is in the image). The
+  update token is `~/.de25web_token_std` when that exists (a re-imaged card
+  still takes the same uploads), else a new one in
   `build/images/de25web_token` - copy it to `~/.de25web_token_std`.
 - **a running board**: `python3 linux/tools/install_webapp.py` (serial
   console, found by id: `usb-TERASIC_DE25-Standard_*-if01-port0`; board
@@ -180,12 +182,16 @@ the register file v2 (build id, blinkers, HEX). Either:
 
 ## Update
 
+A GUI release travels as a signed RAUC bundle:
+
 ```bash
-python3 linux/tools/deploy_web.py            # pack linux/webapp, upload, check, confirm
+python3 linux/tools/make_bundle.py gui && python3 linux/tools/deploy_bundle.py
 ```
 
-or the page's **GUI release** panel: pick a `.tar.gz` made with
-`deploy_web.py --pack-only out.tar.gz`, enter the token, **Upload**.
+or the page's **Update** card: pick the `.raucb`, enter the token,
+**Install**. The board checks the signature, and the post-install handler
+gives the release to the GUI (`POST /api/update` on localhost) and waits
+for the supervisor's verdict below.
 
 What happens on the board (`/opt/de25web`):
 
@@ -201,19 +207,20 @@ supervisor.log, server.log, access.log, control.log
 
 Sockets and pid files are in `/run/de25web/`.
 
-1. `POST /api/update` checks the SHA-256 and the token, unpacks into
-   `releases/`, points `current` at it (`previous` at the old one), writes
-   `pending`, and exits.
+1. `POST /api/update` (localhost only) checks the SHA-256 and the token,
+   unpacks into `releases/` and fsyncs it, points `current` at it
+   (`previous` at the old one), writes `pending`, and exits.
 2. The supervisor stops the three processes and starts the new release's,
    on test for 120 s.
 3. The release is kept once it is confirmed (`POST /api/update/confirm`):
    the page confirms by itself when it loads and reads the board;
-   `deploy_web.py` confirms after checking the version and the board id.
+   `deploy_bundle.py` confirms after checking the version and the board id.
    The server refuses to confirm (503) unless `fpga_access.py` and
    `temp_control.py` answer.
 4. Otherwise the supervisor reverts to `previous` when the 120 s pass, when
    the release's processes exit 3 times (together), or when the board
-   restarts during the test.
+   restarts during the test. It also reverts, once per start, a release
+   whose files are missing or empty (lost in a power cut).
 
 An upload while another release is still on test leaves `previous` at the
 last confirmed release, so a failed test never lands on a release nobody
@@ -239,12 +246,13 @@ supervisor on the host (busybox `sh`, `--sim`, a layout in `/tmp/d25s`).
 | `POST /api/fan` | `{"rpm": 1500..6000}` - loop in auto/manual: it becomes manual at this speed; loop off: register 9 directly |
 | `GET /api/read?reg=N`, `POST /api/write` | raw register access |
 | `GET /api/version` | release running, previous, on test, `board` |
-| `POST /api/update` | body: release `.tar.gz`; headers `X-Sha256`, `X-Token`; 400 unless its `BOARD` is `de25-std` |
+| `POST /api/bundle` | body: a signed RAUC bundle `.raucb`; headers `X-Sha256`, `X-Token`. Starts `rauc install` (202); a GUI release, a core and/or an image (then a reboot into it) |
+| `GET /api/bundle` | that install: `running`, `rc`, `log`, `reboot` |
+| `POST /api/update` | localhost only (the RAUC handler): body release `.tar.gz`; headers `X-Sha256`, `X-Token`; 400 unless its `BOARD` is `de25-std`. From the network: 403, use a bundle |
 | `POST /api/update/confirm`, `/api/update/rollback` | |
 | `GET /api/fpga` | the FPGA core: `running_build_id` (register 19), `installed` and `previous` manifests, `last_load` |
-| `POST /api/fpga` | body: core bundle `.tar.gz`; headers `X-Sha256`, `X-Token`, `X-Force: 1` (no installed manifest). 200 loaded, 409 refused before anything was touched, 500 failed to load (`rolled_back` says whether the previous core is back) |
 | `POST /api/fpga/reload` | load the installed core again (`X-Token`) |
-| `GET /api/rsu`, `POST /api/rsu` | dormant until plan Phase F |
+| `GET /api/rsu` | the running and failed image, the boot confirmation, `images`: P1 and P2 (priority, build, running) |
 
 ```bash
 curl -X POST -d '{"mode":"breathing"}' http://192.168.1.223/api/blinker

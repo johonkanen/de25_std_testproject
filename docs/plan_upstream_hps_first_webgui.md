@@ -1,5 +1,13 @@
 # Plan: DE25-Standard to upstream boot, HPS-first, network updates, web GUI
 
+> **2026-10-31:** the network updates here (GUI releases over
+> `POST /api/update`, cores over `POST /api/fpga`, whole images over
+> `POST /api/rsu`, and their tools `deploy_web.py`, `deploy_fpga.py`,
+> `deploy_rsu.py`, `rsu_refusal_test.py`) have been replaced by signed RAUC
+> bundles with A/B images - [plan_rauc.md](plan_rauc.md). What follows is
+> the history; the current way is in
+> [agilex5_network_update.md](agilex5_network_update.md).
+
 Status 2026-10-19: Phases 0b, A-E done on the board; Phase F (remote
 system update) F1-F7 done on the board, B1b's watchdog expiry included
 (with the RSU layout it falls back to the factory image - "Phase F

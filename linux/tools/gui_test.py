@@ -262,7 +262,7 @@ def core_tests(page):
     token = open(token_file).read().strip() if os.path.exists(token_file) else ""
     mode = api("/api/board")["blinker"]["name"]
     api("/api/hex", {"value": "0xa5b6c7"})
-    page.js(f'document.getElementById("core-token").value = {json.dumps(token)}')
+    page.js(f'document.getElementById("token").value = {json.dumps(token)}')
     page.js('document.getElementById("core-reload").click()')
     msg = wait_for(lambda: (lambda t: t if t.startswith(("Reloaded", "Reload failed")) else None)(
         page.js('document.getElementById("core-msg").textContent')), timeout=30)
@@ -349,8 +349,10 @@ try:
             page.js('document.getElementById("rsu-image").textContent')))
         pill = page.js('document.getElementById("rsu-confirm").textContent')
         p1 = page.js('document.getElementById("rsu-p1").textContent')
-        check(shown in ("P1", "factory image") and pill in ("confirmed", "fallback image", "on test"),
-              f"FPGA image card: running {shown!r}, {pill!r}, P1 holds {p1!r} (board: {rsu.get('confirm')!r})")
+        p2 = page.js('document.getElementById("rsu-p2").textContent')
+        check(shown in ("P1", "P2", "factory image") and pill in ("confirmed", "fallback image", "on test")
+              and ("running" in (p1 + p2)) == (shown in ("P1", "P2")),
+              f"FPGA image card: running {shown!r}, {pill!r}, P1 {p1!r}, P2 {p2!r} (board: {rsu.get('confirm')!r})")
 
     if SHOTS:
         time.sleep(2)

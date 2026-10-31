@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.modules.setdefault("serial", type(sys)("serial"))      # install_webapp imports it
 sys.path.insert(0, HERE)
 import install_webapp                                       # noqa: E402
-from deploy_web import WEBAPP, pack_release                 # noqa: E402
+from payloads import WEBAPP, pack_release                    # noqa: E402
 
 ROOT = "/tmp/d25s"
 BASE = os.path.join(ROOT, "base")

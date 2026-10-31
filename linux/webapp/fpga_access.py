@@ -53,7 +53,7 @@ the board variant (register 18, "STD\0") and the build id (register 19,
 against de25_std.core.json beside the core), writes back the writable
 registers the load reset (LEDs, fan target, blinker mode, HEX, loopback) and
 resumes. install_core takes a bundle (.tar.gz: de25_std.core.rbf +
-de25_std.core.json, linux/tools/deploy_fpga.py makes it) and refuses it
+de25_std.core.json, make_jic.sh makes it) and refuses it
 unless the manifest's size and SHA-256 match, it is for this board
 (board "de25-std") and its periphery hash equals the installed core's - a
 core only fits the first
@@ -834,7 +834,7 @@ def sha256(data):
 
 
 def check_bundle(path):
-    """the core and manifest out of a deploy_fpga.py bundle, checked"""
+    """the core and manifest out of a core tar (payloads.pack_core: a RAUC core artifact), checked"""
     try:
         with tarfile.open(path, "r:*") as tar:
             files = {}
