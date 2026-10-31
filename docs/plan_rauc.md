@@ -150,12 +150,11 @@ Done when, on the board (needs someone at the power switch):
 | 1.4 - 1.6 | written; on the host: `rauc_handler_test.py` 6/6 (GUI confirmed and repeated, GUI unconfirmed -> reverted, upload refusals 403/400/409/501, core refused/loaded/repeated, `deploy_bundle.py` end to end with a foreign-CA bundle refused, unknown repository); `supervisor_test.py` still 8/8. `rauc install` itself (signature, verity, `compatible` on the board) is untested until the board runs the new image |
 | 1.7 on the board | 2026-10-31, in place over the console (no new card): new kernel on the FAT partition (the FAT has no room for two kernels, so the old one is in `/boot/Image.prev` on the rootfs), RAUC files on the rootfs, one `reboot`: P1 confirmed after 11 s, `rauc status` shows the booted `rootfs.0`. RAUC refused to start until `/var/lib/rauc/gui` and `/core` existed - `make_sdcard_image.sh` now creates them. `./build.sh sdcard` carries all of it |
 | 1 on the board | 2026-10-31, `deploy_bundle.py`: GUI bundle installed and confirmed (12 s); core bundle of the running build: "already running" (3 s); another CA: refused (`unable to get local issuer certificate`); a flipped payload byte: refused (`verity: data block 4 is corrupted`, the install fails); `compatible=de25-nano`: rejected; a GUI release never confirmed: reverted by the supervisor after its 120 s, `rauc install` fails. The GUI never changed on a refusal |
+| 1 cores on the board | 2026-10-31, a new FPGA build (1793422905, same periphery hash; `./build.sh fpga` + `jic` 4 min 31 s): core bundle loaded in 2.15 s, checked, card copy written, the old build kept as previous (6 s in all); GUI + core bundle (GUI `1.0.0+9ac2e21`, core 1792432492 from the old RSU bundle): GUI confirmed first, then the core loaded (12 s); a valid core whose manifest names another build id: loaded, check failed, previous core loaded back, `rauc install` failed, board id still answers. Board left on 1793422905 |
 | 2 | |
 
+
 Still open in step 1:
-- a core bundle that really loads a new build on the board (only the
-  "already running" path ran there; loading and rollback ran with `--sim`);
-- a combined GUI + core bundle on the board;
 - the old endpoints and tools: retire them, or keep them for old images.
 
 Board findings:
