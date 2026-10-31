@@ -38,6 +38,9 @@
 --   addr 24: HEX raw segments HEX5..4  (R/W)
 --   addr 25: HEX segments driven, HEX3..0, 1 = lit (RO)
 --   addr 26: HEX segments driven, HEX5..4 (RO)
+--   addr 27: bits 1:0 the parity of everything the F2SDRAM / F2H buses
+--            return (bridge_parity; a placeholder that keeps the two
+--            buses connected until the scope's DDR writer uses them)  (RO)
 --
 -- In blinker mode 0 (the reset default) LEDR[8:0] follow addr-5 bits 8..0
 -- and LEDR[9] is a ~1 Hz heartbeat so the board shows life without a
@@ -62,6 +65,7 @@
 library ieee;
     use ieee.std_logic_1164.all;
     use ieee.numeric_std.all;
+    use work.hps_axi_pkg.all;
 
 entity register_block is
     generic (
@@ -98,31 +102,11 @@ entity register_block is
         ;HEX4        : out std_logic_vector(6 downto 0)
         ;HEX5        : out std_logic_vector(6 downto 0)
 
-        -- lwhps2fpga (LWH2F) AXI4 register access.  Runs on core_clock
-        -- (de25_soc_top.vhd ties lwhps2fpga_axi_clock to the same 50 MHz
-        -- clock, so no clock-domain crossing is needed here).
-        ;axi_awid    : in  std_logic_vector(3 downto 0)  := (others => '0')
-        ;axi_awaddr  : in  std_logic_vector(28 downto 0) := (others => '0')
-        ;axi_awvalid : in  std_logic := '0'
-        ;axi_awready : out std_logic
-        ;axi_wdata   : in  std_logic_vector(31 downto 0) := (others => '0')
-        ;axi_wstrb   : in  std_logic_vector(3 downto 0)  := (others => '0')
-        ;axi_wvalid  : in  std_logic := '0'
-        ;axi_wready  : out std_logic
-        ;axi_bid     : out std_logic_vector(3 downto 0)
-        ;axi_bresp   : out std_logic_vector(1 downto 0)
-        ;axi_bvalid  : out std_logic
-        ;axi_bready  : in  std_logic := '0'
-        ;axi_arid    : in  std_logic_vector(3 downto 0)  := (others => '0')
-        ;axi_araddr  : in  std_logic_vector(28 downto 0) := (others => '0')
-        ;axi_arvalid : in  std_logic := '0'
-        ;axi_arready : out std_logic
-        ;axi_rid     : out std_logic_vector(3 downto 0)
-        ;axi_rdata   : out std_logic_vector(31 downto 0)
-        ;axi_rresp   : out std_logic_vector(1 downto 0)
-        ;axi_rlast   : out std_logic
-        ;axi_rvalid  : out std_logic
-        ;axi_rready  : in  std_logic := '0'
+        -- lwhps2fpga (LWH2F) AXI4 register access (hps_axi_pkg.vhd).  Runs on
+        -- core_clock (de25_soc_top.vhd ties lwhps2fpga_axi_clock to the same
+        -- 50 MHz clock, so no clock-domain crossing is needed here).
+        ;axi_m2s     : in  t_lwh2f_m2s
+        ;axi_s2m     : out t_lwh2f_s2m
 
         -- Reset for the HPS's own lwhps2fpga bridge hard macro
         -- (de25_soc_top.vhd's hps_subsystem lwhps2fpga_axi_reset_reset),
@@ -136,6 +120,9 @@ entity register_block is
         -- only by a full JTAG reprogram) even though axi_lwh2f_bridge.vhd
         -- itself was verified correct in isolation.
         ;axi_bridge_reset : out std_logic := '1'
+
+        -- register 27: see the register map
+        ;bridge_parity : in std_logic_vector(1 downto 0) := "00"
 
         -- MAX6650 fan controller I2C bus, open-drain (see
         -- source/fan_control/max6650_fan_control.vhd)
@@ -334,6 +321,8 @@ begin
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 25, hex_lit(31 downto 0));
             connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 26,
                 x"0000" & hex_lit(47 downto 32));
+            connect_read_only_data_to_address(bus_from_axi, bus_from_top_axi, 27,
+                (31 downto 2 => '0') & bridge_parity);
 
             uptime_counter <= uptime_counter + 1;
 
@@ -368,28 +357,8 @@ begin
         clock   => core_clock
         ,resetn => not por_reset
 
-        ,awid    => axi_awid
-        ,awaddr  => axi_awaddr
-        ,awvalid => axi_awvalid
-        ,awready => axi_awready
-        ,wdata   => axi_wdata
-        ,wstrb   => axi_wstrb
-        ,wvalid  => axi_wvalid
-        ,wready  => axi_wready
-        ,bid     => axi_bid
-        ,bresp   => axi_bresp
-        ,bvalid  => axi_bvalid
-        ,bready  => axi_bready
-        ,arid    => axi_arid
-        ,araddr  => axi_araddr
-        ,arvalid => axi_arvalid
-        ,arready => axi_arready
-        ,rid     => axi_rid
-        ,rdata   => axi_rdata
-        ,rresp   => axi_rresp
-        ,rlast   => axi_rlast
-        ,rvalid  => axi_rvalid
-        ,rready  => axi_rready
+        ,axi_m2s => axi_m2s
+        ,axi_s2m => axi_s2m
 
         ,bus_from_lwh2f => bus_from_axi
         ,bus_to_lwh2f   => bus_to_axi

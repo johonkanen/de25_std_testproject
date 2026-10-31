@@ -1,9 +1,11 @@
 # hps/ — Agilex 5 HPS subsystem for the DE25-Standard
 
-A Platform Designer system, `hps_subsystem.qsys`, instantiated directly as
-a VHDL `component` in `de25_soc_top.vhd` — the Agilex 5 HPS plus its DDR4
-EMIF. No wrapper-generator script: Platform Designer wires
-`intel_agilex_5_soc_0 ↔ emif_io96b_hps_0` internally, the same way
+A Platform Designer system, `hps_subsystem.qsys` — the Agilex 5 HPS plus
+its DDR4 EMIF — wrapped by [`hps.vhd`](hps.vhd), which `de25_soc_top.vhd`
+instantiates. The wrapper turns each AXI bus into two records
+([`hps_axi_pkg.vhd`](hps_axi_pkg.vhd), see "The AXI buses as records"
+below). Platform Designer wires `intel_agilex_5_soc_0 ↔ emif_io96b_hps_0`
+internally, the same way
 [`de25_nano_testproject`](https://github.com/johonkanen/de25_nano_testproject)
 and the `datacenter_peak_shaving` DE25-Standard build do it.
 
@@ -51,8 +53,8 @@ IO, as long as every copy is edited the same way.
 |---|---|
 | `H2F` (128-bit) | disabled |
 | `LWH2F` (32-bit, lightweight) | **enabled**, exported as `lwhps2fpga` |
-| `F2SDRAM` | disabled |
-| `F2H` (ACE5-Lite) | disabled |
+| `F2SDRAM` | **enabled**, AXI4 256 bit, exported as `f2sdram` (+ `f2sdram_axi_clock`/`_reset`) |
+| `F2H` (ACE5-Lite) | **enabled**, 256 bit, exported as `fpga2hps` (+ `fpga2hps_clock`/`_reset`) |
 | F2H interrupts | enabled, exported as `fpga2hps_interrupt_irq0/1` |
 
 `lwhps2fpga` is wired through `axi_lwh2f_bridge.vhd` into the register
@@ -78,6 +80,66 @@ component boundaries are cached ("generic component") — unlike editing an
 instance's *parameters* (e.g. the bridge widths), which requires editing
 the `.ip` file directly (not attempted here; the vendored bridge config was
 already what this project wants).
+
+## F2SDRAM and F2H: enabled headlessly
+
+Both FPGA-to-HPS buses were enabled for the scope's capture into DDR
+(`docs/plan_scope.md`) the same way as the LCD's pins: every copy of their
+six interfaces (`f2sdram`, `f2sdram_axi_clock`, `f2sdram_axi_reset`,
+`fpga2hps`, `fpga2hps_clock`, `fpga2hps_reset`) copied from Terasic's GHRD,
+which has both at 256 bit, into
+
+- the `.ip`: bus interfaces, model ports (101), the escaped component
+  definition, `f2sdram`'s address-map system info, and the
+  `altera:interface_mapping` blocks with their port mappings. A disabled
+  interface had left a bare placeholder mapping there (no type, no ports);
+  those six were replaced.
+- the `.qsys`: both escaped copies of the component (`componentDefinition`,
+  `defaultBoundary`), the system info, the exports
+  (`altera:interface_mapping`), and `f2sdram` in the address map.
+- parameters `f2s_data_width` and `f2sdram_data_width` = 256.
+
+The GHRD's `.ip` (Quartus 25.1) lacks `terminateWriteChannel` /
+`terminateReadChannel` on `f2sdram`, which its `.qsys` has; 26.1 warned
+about the difference until the two were added to the `.ip` (both false).
+`quartus_ipgenerate` then generates both buses with no new warnings.
+
+An enabled bus has to be used: with `f2sdram_s2m`/`f2h_s2m` left open,
+synthesis stops with `Error (129015): Output port F2SDRAM_RDATA ... is not
+legally connected` and `Error (24265): ... interface f2sdram is not
+connected` (the same for `F2SOC_RDATA` / `fpga2hps`). Using the outputs is
+not enough on its own: the HPS puts a ready-latency FIFO behind each bus,
+and with `rready` tied low or the bus's reset held by a constant, that FIFO
+is never read and synthesis removes it - the same error. So until the
+scope's DDR writer uses them, the idle manager (`c_axi256_m2s_idle`) keeps
+`bready`/`rready` high, both buses come out of reset with the LWH2F bridge,
+and `de25_soc_top.vhd` registers the parity of everything each bus returns
+(`hps_axi_pkg.parity`) into register 27.
+
+`hps_subsystem.tcl` (the GUI's "recreate this system" export) was **not**
+updated for the two buses: it is a record of the GUI-made configuration up
+to the LCD pins and the build does not read it.
+
+## The AXI buses as records
+
+[`hps.vhd`](hps.vhd) wraps the generated `hps_subsystem`: the pins stay
+separate (they are the top level's pins), each AXI bus becomes one record in
+and one out (`hps_axi_pkg.vhd`), manager-to-subordinate `*_m2s` and back
+`*_s2m`:
+
+| bus | manager | records | width |
+|---|---|---|---|
+| `lwh2f` (lwhps2fpga) | HPS | `lwh2f_m2s : out t_lwh2f_m2s`, `lwh2f_s2m : in t_lwh2f_s2m` | AXI4 32 bit |
+| `f2sdram` | fabric | `f2sdram_m2s : in t_axi256_m2s`, `f2sdram_s2m : out t_axi256_s2m` | AXI4 256 bit, to DDR, not coherent |
+| `f2h` (fpga2hps) | fabric | `f2h_m2s : in t_axi256_m2s`, `f2h_s2m : out t_axi256_s2m` | ACE5-Lite 256 bit, through the CCU |
+
+F2SDRAM and F2H share one record type, so one fabric manager can drive
+either (the ACE5-Lite fields are not connected on F2SDRAM). Each bus has
+its own clock and reset input; the fabric-managed buses' inputs default to
+idle (`c_axi256_m2s_idle`). `axi_lwh2f_bridge.vhd` and `register_block.vhd`
+take the LWH2F records too. The component declaration inside `hps.vhd` is
+the generated one: after a change to the `.qsys` or `.ip`, compare it with
+`build/fpga/hps/hps_subsystem/hps_subsystem_inst.vhd`.
 
 ## Building
 

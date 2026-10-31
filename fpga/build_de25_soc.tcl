@@ -113,6 +113,7 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/hVHDL_fpga_intercon
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_communication/fpga_interconnect_16bit_pkg.vhd
 set_global_assignment -name VHDL_FILE git_hash_pkg.vhd
 set_global_assignment -name VHDL_FILE build_id_pkg.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/hps/hps_axi_pkg.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/axi_lwh2f_bridge.vhd
 
 # MAX6650 fan controller (see source/fan_control/)
@@ -130,6 +131,7 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/led_blinkers.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/hex_display.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/register_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/hps/hps.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/de25_soc_top.vhd
 
 # ---------------------------------------------------------- SoC HDL + IP
