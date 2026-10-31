@@ -207,6 +207,11 @@ Still open in step 1:
   three upload cards are one Update card for `.raucb` files.
   `rauc_handler_test.py`'s `refusals` checks the old uploads from a
   non-loopback address.
+  The page's Update card in a real browser (`gui_test.py --bundle`, headless
+  Chromium, the file picked into the input): a GUI release (page reloaded
+  into it and confirmed it, 10 s) and two real core loads (7 s, 6 s), each
+  refused first with a wrong token. An image bundle through the page is not
+  tried yet (46 MB hashed in the page's JavaScript SHA-256, then the reboot).
 
 Board findings in step 2 (all fixed):
 - A GUI release installed seconds before the HPS stopped (the JTAG

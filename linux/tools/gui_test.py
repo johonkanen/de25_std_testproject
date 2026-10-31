@@ -10,7 +10,12 @@ are put back afterwards), check the FPGA core card shows the running build,
 then screenshot the page at desktop and phone widths. --reload-core also
 clicks the card's Reload (the board pauses ~2 s; the token from
 ~/.de25web_token_std) and checks the blinker mode and the displays survive
-it. Exit status 1 when the page does not show what was expected.
+it. --bundle PATH (repeatable) also installs a RAUC bundle through the
+Update card, as a person would (the file picked into the input, the token
+typed): first with a wrong token (refused), then with the right one, and
+follows it - a GUI release: the page reloads into it and confirms it, and
+`rauc install` ends with exit 0; a core: "Installed." and the build runs.
+Exit status 1 when the page does not show what was expected.
 
 Works against the board or a local `fpga_web.py --sim`:
     python3 linux/webapp/fpga_web.py --sim --port 8000 &
@@ -39,6 +44,11 @@ if "--shots" in ARGV:
 RELOAD_CORE = "--reload-core" in ARGV
 if RELOAD_CORE:
     ARGV.remove("--reload-core")
+BUNDLES = []
+while "--bundle" in ARGV:
+    i = ARGV.index("--bundle")
+    BUNDLES.append(os.path.abspath(ARGV[i + 1]))
+    del ARGV[i:i + 2]
 URL = ARGV[0] if ARGV else "http://192.168.1.223/"
 LEDS = 10
 PORT = 9224
@@ -273,6 +283,63 @@ def core_tests(page):
           f"HEX a5b6c7 -> {after and after['hex']['value']}")
 
 
+def bundle_tests(page, path):
+    """a RAUC bundle through the Update card, as a person would"""
+    token = open(os.path.expanduser("~/.de25web_token_std")).read().strip()
+    name = os.path.basename(path)
+
+    def pick():
+        root = page.call("DOM.getDocument")["root"]["nodeId"]
+        node = page.call("DOM.querySelector", nodeId=root, selector="#update-file")["nodeId"]
+        page.call("DOM.setFileInputFiles", files=[path], nodeId=node)
+
+    def submit(tok):
+        page.js(f'document.getElementById("token").value = {json.dumps(tok)}')
+        page.js('document.querySelector("#update-form button[type=submit]").click()')
+
+    msg = lambda: page.js('document.getElementById("update-msg").textContent') or ""
+    # a wrong token: refused before the body, nothing installed
+    pick()
+    submit("wrong-token")
+    shown = wait_for(lambda: (lambda m: m if m.startswith("Not installed") else None)(msg()), 60)
+    check(bool(shown) and "X-Token" in shown, f"Update card, {name}, wrong token: {shown!r}")
+    # the right token
+    before = api("/api/version")["release"]
+    core_before = api("/api/fpga").get("running_build_id")
+    page.js("window.__before_install = 1")
+    pick()
+    submit(token)
+    t0 = time.time()
+    outcome = None
+    while time.time() - t0 < 300 and outcome is None:
+        time.sleep(1)
+        try:
+            reloaded = page.js("window.__before_install === undefined")
+            m = msg()
+        except Exception:                       # the page reloading under us
+            continue
+        if reloaded:
+            outcome = "reloaded"
+        elif m.startswith(("Installed", "rauc install failed", "Not installed")):
+            outcome = m
+    if outcome == "reloaded":
+        # a GUI release: the new page confirms it (loadVersion), which lets
+        # rauc install finish
+        v = wait_for(lambda: (lambda v: v if v.get("release") != before and not v.get("pending") else None)(
+            api("/api/version")), 60)
+        b = wait_for(lambda: (lambda b: b if b.get("rc") is not None else None)(api("/api/bundle")), 60)
+        page_rel = page.js('document.getElementById("ver").textContent')
+        check(bool(v) and bool(b) and b.get("rc") == 0 and page_rel == v.get("release"),
+              f"Update card, {name}: page reloaded into {page_rel!r}, confirmed "
+              f"(was {before!r}), rauc install exit {b and b.get('rc')} - {time.time() - t0:.0f} s")
+    else:
+        b = api("/api/bundle")
+        core = api("/api/fpga")
+        check(outcome is not None and outcome.startswith("Installed") and b.get("rc") == 0,
+              f"Update card, {name}: {outcome!r}, rauc install exit {b.get('rc')}, core "
+              f"{core_before} -> {core.get('running_build_id')} - {time.time() - t0:.0f} s")
+
+
 def shot(page, name, width, height):
     page.call("Emulation.setDeviceMetricsOverride", width=width, height=height,
               deviceScaleFactor=1, mobile=width < 600)
@@ -343,6 +410,8 @@ try:
     hex_tests(page)
     control_tests(page)
     core_tests(page)
+    for b in BUNDLES:
+        bundle_tests(page, b)
     rsu = api("/api/rsu")
     if rsu.get("rsu"):
         shown = wait_for(lambda: (lambda t: t if t and t != "-" else None)(
