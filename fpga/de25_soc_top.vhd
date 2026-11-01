@@ -43,6 +43,11 @@ entity de25_soc_top is
         HEX5          : out   std_logic_vector(6 downto 0);
         FPGA_I2C_SCL  : inout std_logic;                     -- PIN_BF120, MAX6650 fan (open-drain)
         FPGA_I2C_SDA  : inout std_logic;                     -- PIN_BH118, MAX6650 fan (open-drain)
+        -- the TLA2518 ADC on the 2x5 header J18 (tla2518_reader.vhd)
+        ADC_SCK       : out   std_logic;                     -- PIN_CH4
+        ADC_CS_n      : out   std_logic;                     -- PIN_BP22
+        ADC_SDI       : out   std_logic;                     -- PIN_BF32
+        ADC_SDO       : in    std_logic;                     -- PIN_CK4
         H2F_CLK_TEST  : out   std_logic;                     -- GPIO_D[2] (PIN_BF29) - see h2f_user0_clk_heartbeat.vhd
 
         -- ---- HPS ----
@@ -159,7 +164,12 @@ begin
             f2h_s2m          => f2h_s2m,
 
             FPGA_I2C_SCL => FPGA_I2C_SCL,
-            FPGA_I2C_SDA => FPGA_I2C_SDA
+            FPGA_I2C_SDA => FPGA_I2C_SDA,
+
+            ADC_SCK  => ADC_SCK,
+            ADC_CS_n => ADC_CS_n,
+            ADC_SDI  => ADC_SDI,
+            ADC_SDO  => ADC_SDO
         );
 
     ------------------------------------------------------------------

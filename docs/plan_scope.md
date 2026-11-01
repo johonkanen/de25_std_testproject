@@ -201,6 +201,50 @@ channel's minimum, maximum and mean. The target is 1-10 k points/s for hours.
     board as it goes out, about 46 k rows/s (7 MB/s): about 2 min for that 10-minute log.
 - **Not covered:** the logger records the test generator. Real inputs come with phase 5.
 
+## Phase 5, part 1: the TLA2518, on the board (2026-11-01)
+
+- **`fpga/tla2518_reader.vhd`** (registers 320..333) reads the board's TLA2518 continuously.
+  The TLA2518 has 8 channels, 12 bits and runs up to 1 MS/s; it sits on the 2×5 header J18,
+  on pins CH4, CK4, BF32 and BP22.
+  - **Start-up, on its own after reset:** it waits for power-up, resets the ADC, turns on the
+    4-bit channel ID, calibrates the offset, writes the channel mask and starts auto-sequence.
+  - **Then:** one 16-bit frame per conversion, SPI-00 at 25 MHz, with CS high for 640 ns
+    (tCONV is 600 ns).
+  - **Rate:** 67 clocks a conversion, so **746 k conversions/s**, 93 k a channel with all eight.
+  - **SDO capture:** SDO is taken a whole SCLK period after the edge that launched it, through
+    an I/O input register; SCLK, CS and SDI leave from output registers. That leaves 40 ns for
+    the round trip; the ADC itself takes up to 16 ns.
+  - **Checking:** each frame's channel ID must be the next one in the mask; any other frame is
+    counted.
+  - **Link test:** with FIX_PAT on, every frame is **0xA5A5**: the pattern only, with no
+    channel ID. The datasheet says "0xA5A"; the board showed the rest. In that mode the reader
+    takes the channels in sequence order and counts any frame that isn't 0xA5A5.
+  - **Raw access:** a register reads and writes the ADC's own registers while the reader is
+    stopped.
+- **Scope sources:**
+  - AIN0..AIN7 are sources 16..23 (unsigned, 0..4095), each the input's last result.
+  - Source 24, "ADC strobes", toggles lane 0 at each conversion and lane 1 at each scan.
+  - The scope, the stream and the logger take them like any other source.
+- **Software:**
+  - `GET/POST /api/adc` and `/api/adc/register` (ops `adc`, `adc_set`, `adc_register` in
+    `fpga_access.py`); the simulator has the ADC too.
+  - The GUI's ADC card shows each input's level, volts and code, plus Run/Stop, the link
+    test, the channel checkboxes, the measured rate and the error count.
+  - `gui_test.py` runs the link test through the registers and through a scope capture of
+    AIN0..7.
+- **Results on the board:**
+  - **Rate:** 746 480 conversions/s measured, 746 269 calculated.
+  - **Link test:** 44.8 M frames in 60 s, all 0xA5A5, 0 errors.
+  - **Normal mode:** 22.4 M + 29.5 M conversions, 0 channel-ID errors.
+  - **Scope capture:** of AIN0..7 under the link test, 1024 samples × 8, all 0xA5A.
+- **Not yet:**
+  - **No known voltage measured yet:** with nothing on J18 every input reads about 2.2 V, which
+    is open-input pickup.
+  - **Full scale** is taken as 3.3 V: AVDD is the board's 3.3 V through a ferrite (the 5 V
+    option is not fitted), though the user manual says 3.4 V.
+  - **Sampling:** the scope samples the held values at its own rate, not in step with the
+    conversions.
+
 ## Phases
 
 1. **Triggered scope in block RAM.** `fpga_scope` into the FPGA design on the register bus;

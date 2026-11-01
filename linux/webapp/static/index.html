@@ -152,6 +152,20 @@
         </table>
       </div>
     </section>
+
+    <section class="card" id="adc-card" aria-labelledby="adc-title" hidden>
+      <div class="card-head">
+        <h2 id="adc-title">ADC <span class="sub">TLA2518 on the 2×5 header J18: 8 inputs, 12 bit, 0 to <span id="adc-fs">3.3</span> V</span></h2>
+        <span id="adc-status" class="pill pill-wait">-</span>
+      </div>
+      <div class="scope-bar">
+        <button type="button" id="adc-run" aria-pressed="false" title="Start or stop the fabric's reading">Run</button>
+        <label title="The ADC sends 0xA5A for every conversion: checks the SPI link without an input"><input type="checkbox" id="adc-fixed"> link test</label>
+      </div>
+      <div class="adc-rows" id="adc-rows" role="table" aria-label="ADC inputs"></div>
+      <p class="sub">The inputs are also the oscilloscope's sources AIN0..AIN7, so the scope, the stream and the logger take them like any other signal. Untick an input to leave it out of the ADC's sequence.</p>
+      <p class="sub" id="adc-msg" role="status"></p>
+    </section>
   </section>
 
   <aside class="panels">

@@ -1537,11 +1537,84 @@ function showLogs(r) {
   for (const b of $("log-rows").querySelectorAll("button[data-delete]")) b.onclick = () => logDelete(b.dataset.delete);
 }
 
+// ---- the ADC (fpga/tla2518_reader.vhd): GET/POST /api/adc
+const adc = { timer: null, last: null, error: "" };
+
+async function initAdc() {
+  let r;
+  try { r = await api("/api/adc"); } catch (e) { return; }       // no ADC reader in this core
+  $("adc-card").hidden = false;
+  $("adc-rows").innerHTML = r.channels.map((ch) =>
+    `<div class="adc-row" role="row" id="adc-row-${ch.channel}">` +
+    `<input type="checkbox" id="adc-on-${ch.channel}" aria-label="AIN${ch.channel} in the sequence">` +
+    `<span role="rowheader">AIN${ch.channel}</span>` +
+    `<span class="bar" role="cell"><span id="adc-bar-${ch.channel}"></span></span>` +
+    `<span class="num" role="cell" id="adc-v-${ch.channel}">-</span>` +
+    `<code class="num" role="cell" id="adc-code-${ch.channel}" title="the 12-bit code">-</code></div>`).join("");
+  for (let c = 0; c < 8; c++) {
+    $(`adc-on-${c}`).onchange = () => {
+      let mask = 0;
+      for (let k = 0; k < 8; k++) if ($(`adc-on-${k}`).checked) mask |= 1 << k;
+      if (!mask) { $(`adc-on-${c}`).checked = true; return; }   // at least one
+      adcSet({ mask });
+    };
+  }
+  $("adc-run").onclick = () => adcSet({ run: !(adc.last && adc.last.run) });
+  $("adc-fixed").onchange = () => adcSet({ fixed_pattern: $("adc-fixed").checked });
+  showAdc(r);
+  adc.timer = setInterval(refreshAdc, 500);
+}
+
+async function refreshAdc() {
+  try { showAdc(await api("/api/adc")); adc.error = ""; } catch (e) { adc.error = e.message; showAdc(adc.last); }
+}
+
+async function adcSet(req) {
+  try { showAdc(await api("/api/adc", req)); adc.error = ""; } catch (e) { adc.error = e.message; }
+}
+
+function showAdc(r) {
+  if (!r) return;
+  adc.last = r;
+  const pill = $("adc-status");
+  const bad = r.id_errors > 0;
+  pill.className = "pill pill-" + (r.state === "converting" ? (bad ? "warn" : "ok") : "wait");
+  pill.textContent = r.state === "converting" && r.fixed_pattern ? "link test" : r.state;
+  $("adc-run").textContent = r.run ? "Stop" : "Run";
+  $("adc-run").setAttribute("aria-pressed", String(r.run));
+  $("adc-fixed").checked = r.fixed_pattern;
+  $("adc-fs").textContent = r.full_scale_v;
+  for (const ch of r.channels) {
+    const c = ch.channel, on = ch.enabled;
+    if (document.activeElement !== $(`adc-on-${c}`)) $(`adc-on-${c}`).checked = on;
+    $(`adc-row-${c}`).classList.toggle("off", !on || r.state !== "converting");
+    $(`adc-bar-${c}`).style.width = `${(100 * ch.code / 4095).toFixed(1)}%`;
+    $(`adc-v-${c}`).textContent = on ? `${ch.volts.toFixed(3)} V` : "-";
+    $(`adc-code-${c}`).textContent = on ? (r.fixed_pattern ? ch.code.toString(16).toUpperCase() : ch.code) : "-";
+  }
+  const n = r.channels.filter((ch) => ch.enabled).length;
+  let msg;
+  if (r.state === "converting") {
+    const rate = r.rate == null ? "-" : `${(r.rate / 1000).toFixed(1)} k`;
+    msg = `${rate} conversions/s (${(r.expected_rate / 1000).toFixed(1)} k expected), ` +
+      `${r.rate == null ? "-" : (r.rate / n / 1000).toFixed(1) + " k"} a channel; SCLK ${(r.sclk_hz / 1e6).toFixed(1)} MHz; ` +
+      `${r.id_errors} channel-ID error${r.id_errors === 1 ? "" : "s"}`;
+    if (r.fixed_pattern) {
+      const wrong = r.channels.filter((ch) => ch.enabled && ch.code !== 0xA5A).length;
+      msg += wrong ? `; link test: ${wrong} input(s) not A5A` : "; link test: every input A5A";
+    }
+  } else {
+    msg = r.run ? "starting the ADC (reset, calibration)" : "stopped";
+  }
+  $("adc-msg").textContent = adc.error ? `${adc.error} - ${msg}` : msg;
+}
+
 function escapeHtml(t) {
   return String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 initScope();
+initAdc();
 loadVersion().catch((e) => { $("release-msg").textContent = "Version unknown: " + e.message; });
 loadCoreInfo().catch((e) => { $("core-msg").textContent = "Core unknown: " + e.message; });
 loadRsuInfo().catch((e) => { $("rsu-image").textContent = "unknown: " + e.message; });

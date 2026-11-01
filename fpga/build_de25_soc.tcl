@@ -139,6 +139,7 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/s
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/scope_fifo.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/scope_ddr_writer.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/scope_decimator.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/tla2518_reader.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/scope_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/register_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vhd
@@ -250,6 +251,20 @@ foreach p {KEY[0] KEY[1] KEY[2] KEY[3] SW[0] SW[1] SW[2] SW[3] SW[4] SW[5] SW[6]
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to H2F_CLK_TEST
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SCL
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to FPGA_I2C_SDA
+
+# the TLA2518 ADC (from Demonstration/FPGA/golden_top/golden_top.qsf); I/O
+# registers, so the SPI's round trip is fixed (tla2518_reader.vhd)
+set_location_assignment PIN_CH4  -to ADC_SCK
+set_location_assignment PIN_CK4  -to ADC_SDO
+set_location_assignment PIN_BF32 -to ADC_SDI
+set_location_assignment PIN_BP22 -to ADC_CS_n
+foreach p {ADC_SCK ADC_SDO ADC_SDI ADC_CS_n} {
+    set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to $p
+}
+foreach p {ADC_SCK ADC_SDI ADC_CS_n} {
+    set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to $p
+}
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to ADC_SDO
 
 # ------------------------------------------------ HPS + DDR4 pins (GHRD)
 # 100 pins x {location, IO_STANDARD} for the peripherals this pin mux

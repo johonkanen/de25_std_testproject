@@ -351,6 +351,71 @@ def logger_tests(page):
         print(f"screenshot {os.path.join(SHOTS, 'logger.png')}")
 
 
+def adc_tests(page):
+    """the ADC card: converting at the expected rate with no channel-ID errors;
+    the link test (the ADC's fixed pattern) gives 0xA5A on every input, in
+    the registers and in a scope capture of AIN0..7; an input left out of the
+    sequence"""
+    try:
+        r = api("/api/adc")
+    except (OSError, ValueError) as e:
+        print(f"SKIP  ADC: {e}")
+        return
+    if not check(wait_for(lambda: page.js('!document.getElementById("adc-card").hidden')),
+                 f"ADC card shown: state {r['state']}, mask {r['mask']:#04x}"):
+        return
+
+    def settled(pred, timeout=6):
+        return wait_for(lambda: (lambda a: a if a.get("state") == "converting" and a.get("rate")
+                                 and pred(a) else None)(api("/api/adc")), timeout=timeout)
+
+    a = settled(lambda a: True)
+    check(a and abs(a["rate"] / a["expected_rate"] - 1) < 0.05 and a["id_errors"] == 0,
+          f"converting: {a and round(a['rate'])} conversions/s of {a and round(a['expected_rate'])} expected, "
+          f"{a and a['id_errors']} ID errors")
+    page.js('document.getElementById("adc-fixed").click()')
+    a = settled(lambda a: a["fixed_pattern"])
+    codes = a and [ch["code"] for ch in a["channels"]]
+    check(a and all(c == 0xA5A for c in codes) and a["id_errors"] == 0,
+          f"link test: codes {codes and ' '.join(f'{c:03X}' for c in codes)}, {a and a['id_errors']} ID errors")
+    msg = wait_for(lambda: (lambda t: t if "link test" in (t or "") else None)(
+        page.js('document.getElementById("adc-msg").textContent')))
+    check(msg and "every input A5A" in msg, f"the card: {msg!r}")
+    cap = None
+    for _ in range(20):
+        cap = api("/api/scope/capture", {"settings": {"sources": list(range(16, 24)), "length": 1024,
+                                                      "trigger": False}, "force": True})
+        if cap.get("done"):
+            break
+    if cap and cap.get("done"):
+        samples = struct.unpack(f"<{len(base64.b64decode(cap['data'])) // 2}h", base64.b64decode(cap["data"]))
+        wrong = sum(1 for v in samples if v != 0xA5A)
+        check(wrong == 0, f"scope capture of AIN0..7: {len(samples) // 8} samples, {wrong} values not 0xA5A")
+    else:
+        check(False, f"scope capture of AIN0..7: {cap}")
+    page.js('document.getElementById("adc-on-3").click()')
+    a = settled(lambda a: a["mask"] == 0xF7)
+    off = page.js('document.getElementById("adc-row-3").classList.contains("off")')
+    check(a and off and not a["channels"][3]["enabled"] and a["id_errors"] == 0,
+          f"AIN3 left out: mask {a and hex(a['mask'])}, row greyed {off}, {a and a['id_errors']} ID errors")
+    page.js('document.getElementById("adc-on-3").click()')
+    page.js('document.getElementById("adc-fixed").click()')
+    a = settled(lambda a: a["mask"] == 0xFF and not a["fixed_pattern"])
+    check(a is not None, f"back to all inputs, no link test: {a and [ch['volts'] for ch in a['channels']]} V")
+    if SHOTS:
+        page.call("Emulation.setDeviceMetricsOverride", width=1280, height=900, deviceScaleFactor=1, mobile=False)
+        page.js('document.getElementById("adc-card").scrollIntoView()')
+        time.sleep(1.0)
+        r = page.js('(r => ({x: r.x, y: r.y + scrollY, w: r.width, h: r.height}))'
+                    '(document.getElementById("adc-card").getBoundingClientRect())')
+        data = page.call("Page.captureScreenshot", format="png", captureBeyondViewport=True,
+                         clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"], "scale": 1})["data"]
+        os.makedirs(SHOTS, exist_ok=True)
+        with open(os.path.join(SHOTS, "adc.png"), "wb") as f:
+            f.write(base64.b64decode(data))
+        print(f"screenshot {os.path.join(SHOTS, 'adc.png')}")
+
+
 def control_tests(page):
     """the temperature control card: plot, mode buttons, setpoint, slider"""
     c0 = api("/api/control")["state"]
@@ -637,6 +702,7 @@ try:
     scope_tests(page)
     stream_tests(page)
     logger_tests(page)
+    adc_tests(page)
     control_tests(page)
     core_tests(page)
     for b in BUNDLES:

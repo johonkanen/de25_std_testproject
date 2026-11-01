@@ -64,6 +64,11 @@ API:
                                     a log: points/s of min/max/mean, until stopped,
                                     the duration, or /data nearly full
     POST /api/logs/stop             stop it
+    GET  /api/adc                   the TLA2518 ADC: state, rate, each input's code and volts
+    POST /api/adc {"run", "fixed_pattern", "mask", ...}
+                                    its reader's control (a write restarts it)
+    POST /api/adc/register {"address", "value"}
+                                    one of the ADC's own registers (only while stopped)
     GET  /api/logs/<name>.i16|.json|.csv
                                     a log's points (64 bytes each), description, or CSV
     POST /api/logs/delete {"name": "log-..."}
@@ -721,6 +726,18 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                 else:
                     self._log_csv(f, size, meta, name)
 
+        def _adc(self, op, req):
+            """the ADC reader (fpga_access.py's adc ops): 404 for a core without it"""
+            try:
+                r = FpgaClient(run, timeout=5.0).call(op=op, **req)
+            except FpgaUnavailable as e:
+                self._json({"error": str(e)}, 503)
+                return
+            except ValueError as e:
+                self._json({"error": str(e)}, 404 if "no ADC" in str(e) else 400)
+                return
+            self._json(r)
+
         def _log_csv(self, f, size, meta, name):
             """time, then each channel's min, max, mean: one row a point,
             made as it goes out (no length: the connection closes after).
@@ -804,6 +821,8 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     self._json({"error": str(e)}, 404)
                 except FpgaUnavailable as e:
                     self._json({"error": str(e)}, 503)
+            elif p == "/api/adc":
+                self._adc("adc", {})
             elif p == "/api/logs":
                 self._logs_index()
             elif p.startswith("/api/logs/"):
@@ -895,6 +914,10 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     req = self._json_body()
                     self._json(scope_fpga.call(op="scope_capture", settings=req.get("settings", {}),
                                                force=bool(req.get("force"))))
+                elif p == "/api/adc":
+                    self._adc("adc_set", self._json_body())
+                elif p == "/api/adc/register":
+                    self._adc("adc_register", self._json_body())
                 elif p == "/api/logs/start":
                     req = self._json_body()
                     self._json(FpgaClient(run, timeout=30.0).call(op="log_start",

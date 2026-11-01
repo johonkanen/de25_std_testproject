@@ -36,6 +36,9 @@ Protocol: <run>/fpga.sock, one JSON object per line each way.
                                                 the scope's stream (below)
     {"op": "log_start", "settings": {...}}, {"op": "log_stop"}, {"op": "log_status"}
                                                 the data logger (below)
+    {"op": "adc"}, {"op": "adc_set", "run": true, "mask": 255, ...},
+    {"op": "adc_register", "address": 0, "value": null}
+                                                the TLA2518 ADC (fpga/tla2518_reader.vhd)
 Errors: {"ok": false, "error": "..."}; while paused every read/write answers
 {"ok": false, "error": "paused: <reason>", "paused": true}, and so does every
 read/write while the fabric is not configured (below).
@@ -169,6 +172,7 @@ BOARD_NAME = "de25-std"            # in a core manifest
 FEATURE_HW_BLINKERS = 1 << 0
 FEATURE_HEX = 1 << 1
 FEATURE_SCOPE = 1 << 2
+FEATURE_ADC = 1 << 3
 
 # the oscilloscope (fpga/scope_block.vhd; the register map is the header of
 # fpga/source/fpga_scope/source/scope_capture.vhd)
@@ -217,6 +221,16 @@ LOG_RESERVE_BYTES = 64 << 20           # a log stops before /data has less than 
 LOG_POLL_S = 0.1
 LOG_META_S = 5.0                       # its .json rewritten this often while it runs
 LOG_SIM_RATE = 500                     # --sim: points/s at most
+# the TLA2518 ADC on the 2x5 header (fpga/tla2518_reader.vhd)
+ADC_BASE = 320
+A_CONTROL, A_STATUS, A_CONVERSIONS, A_ERRORS, A_ACCESS = (ADC_BASE + i for i in range(5))
+A_VALUE0, A_SCANS, ADC_REGS = ADC_BASE + 5, ADC_BASE + 13, 14
+ADC_CONTROL_RESET = 0x2001FF05         # run, calibrate, all 8 channels, SCLK 25 MHz, CS high 640 ns
+ADC_STATES = ("stopped", "waiting", "setting up", "converting", "register access")
+ADC_CHANNELS = 8
+ADC_CODES = 4096                       # 12 bit
+ADC_FULL_SCALE_V = 3.3                 # AVDD: the board's 3.3 V (the user manual says 3.4 V)
+ADC_CS_HIGH_MIN = 31                   # clocks: 620 ns, tCONV is 600
 LEDS = 10                          # LEDR[9:0]
 KEY_RESET_BIT = 4                  # register 7: CPU_RESET_n pressed
 WRITABLE = {REG_LOOPBACK, REG_LEDS, REG_FAN_KTACH, REG_BLINKER,
@@ -376,7 +390,7 @@ class SimBridge:
 
     def __init__(self, state_file=None):
         self._regs = {REG_ID: BOARD_ID, REG_GIT: 0x5151D00D, REG_VARIANT: BOARD_VARIANT,
-                      REG_FEATURES: FEATURE_HW_BLINKERS | FEATURE_HEX | FEATURE_SCOPE,
+                      REG_FEATURES: FEATURE_HW_BLINKERS | FEATURE_HEX | FEATURE_SCOPE | FEATURE_ADC,
                       REG_FAN_STATUS: 0x1F000529, REG_BUILD_ID: 0, **RESET_VALUES}
         self._state_file = state_file
         if state_file:
@@ -394,6 +408,10 @@ class SimBridge:
         self._rpm_t = self._t0
         self._lock = threading.Lock()
         self.fan_stuck = False
+        self._adc_control = ADC_CONTROL_RESET
+        self._adc_t0 = self._t0
+        self._adc_regs = {0: 0x81}             # the ADC's own registers (SYSTEM_STATUS: BOR)
+        self._adc_read = 0
 
     def set_fan_stuck(self, stuck):
         """the MAX6650 stuck in full-on (plan §5.17b): Config 0x09, full speed"""
@@ -462,7 +480,45 @@ class SimBridge:
                 lit |= seg << (8 * n)
         return lit
 
+    def adc_code(self, c, t):
+        """the simulated ADC's AINc at time t (s): a slow sine each, its own
+        frequency and level, a little noise; 0xA5A in the fixed pattern"""
+        if self._adc_control & 2:
+            return 0xA5A
+        v = 0.4 + 0.35 * c + 0.3 * math.sin(2 * math.pi * (0.5 + c) * t) + random.gauss(0, 0.001)
+        return max(0, min(ADC_CODES - 1, int(v / ADC_FULL_SCALE_V * ADC_CODES)))
+
+    def _adc(self, reg_num):
+        ctl = self._adc_control
+        running = ctl & 1
+        t = time.monotonic() - self._adc_t0
+        live = running and t > 0.015                 # 5 ms waits: power-up, RST, CAL
+        rate = adc_expected_rate(ctl)
+        mask = ctl >> 8 & 0xFF
+        n = bin(mask).count("1") or 1
+        conv = int((t - 0.015) * rate) if live else 0
+        i = reg_num - ADC_BASE
+        if i == 0:
+            return ctl
+        if i == 1:
+            return self._adc_read << 8 | (3 if live else 1 if running else 0)
+        if i == 2:
+            return conv & 0xFFFFFFFF
+        if i == 3:
+            return 0
+        if 5 <= i < 13:
+            c = i - 5
+            if not live or not mask >> c & 1:
+                return 0
+            return ((conv // n) & 0xFFFF) << 16 | self.adc_code(c, time.monotonic() - self._t0)
+        if i == 13:
+            return (conv // n) & 0xFFFFFFFF if live else 0
+        return 0
+
     def read(self, reg_num: int) -> int:
+        if ADC_BASE <= reg_num < ADC_BASE + ADC_REGS:
+            with self._lock:
+                return self._adc(reg_num)
         if reg_num == REG_FAN_TACH:
             t = time.monotonic() - self._t0
             rpm = max(int(self.fan_rpm() + 10 * math.sin(t)), 0)
@@ -506,6 +562,16 @@ class SimBridge:
 
     def write(self, reg_num: int, value: int) -> None:
         with self._lock:
+            if reg_num == A_CONTROL:
+                self._adc_control = value & 0xFFFFFFFF
+                self._adc_t0 = time.monotonic()
+                return
+            if reg_num == A_ACCESS and not self._adc_control & 1:
+                if value >> 16 & 1:
+                    self._adc_read = self._adc_regs.get(value >> 8 & 0xFF, 0)
+                else:
+                    self._adc_regs[value >> 8 & 0xFF] = value & 0xFF
+                return
             if reg_num not in WRITABLE:
                 return
             if reg_num == REG_FAN_KTACH:
@@ -1072,7 +1138,8 @@ class ScopeSim:
 
     PROBES = (("fan rpm", "unsigned"), ("fan tach", "unsigned"), ("switches", "digital"),
               ("keys", "digital"), ("LEDR", "digital"), ("LEDR0 level", "unsigned"),
-              ("LEDR9 level", "unsigned"), ("fan i2c", "digital"))
+              ("LEDR9 level", "unsigned"), ("fan i2c", "digital"),
+              *((f"AIN{c}", "unsigned") for c in range(ADC_CHANNELS)), ("ADC strobes", "digital"))
     GENERATOR = ("sine", "cosine", "triangle", "square", "sawtooth", "noise", "sine + noise", "counter")
 
     def __init__(self, bridge):
@@ -1135,8 +1202,13 @@ class ScopeSim:
             return levels & 0xFF
         if p == 6:
             return (b.read(REG_LEVELS2) >> 8) & 0xFF
-        # the fan's I2C bus: a 100 kHz transfer every 10 ms, idle high between
         t = k / rate
+        if 8 <= p < 8 + ADC_CHANNELS:              # AIN0..7: the value held between conversions
+            return b.adc_code(p - 8, t)
+        if p == 8 + ADC_CHANNELS:                  # lane 0 each conversion, lane 1 each scan
+            conv = int(t * adc_expected_rate(ADC_CONTROL_RESET))
+            return (conv & 1) | ((conv // ADC_CHANNELS) & 1) << 1
+        # the fan's I2C bus: a 100 kHz transfer every 10 ms, idle high between
         bit = int((t % 0.01) * 100_000)
         if bit >= 30:
             return 0b0011
@@ -1665,6 +1737,60 @@ def log_formats(sources, info):
     return word
 
 
+def adc_expected_rate(control):
+    """conversions/s the reader makes (tla2518_reader.vhd: 33 half periods of
+    SCLK, CS high, 2 clocks; 67 at the defaults: 746 k, as on the board)"""
+    half = (control >> 16 & 15) or 1
+    cs = max(ADC_CS_HIGH_MIN, control >> 24 & 255)
+    return SCOPE_CLOCK_HZ / (33 * half + cs + 2)
+
+
+def adc_decode(regs):
+    """registers ADC_BASE .. +13 as a dict"""
+    ctl, st = regs[0], regs[1]
+    mask = ctl >> 8 & 0xFF
+    state = st & 7
+    return {
+        "control": ctl, "run": bool(ctl & 1), "fixed_pattern": bool(ctl & 2), "calibrate": bool(ctl & 4),
+        "mask": mask, "sclk_hz": SCOPE_CLOCK_HZ / (2 * ((ctl >> 16 & 15) or 1)),
+        "cs_high_ns": max(ADC_CS_HIGH_MIN, ctl >> 24 & 255) * 1e9 / SCOPE_CLOCK_HZ,
+        "expected_rate": adc_expected_rate(ctl),
+        "state": ADC_STATES[state] if state < len(ADC_STATES) else str(state),
+        "access_pending": bool(st & 8), "register_read": st >> 8 & 0xFF,
+        "conversions": regs[2], "id_errors": regs[3], "scans": regs[13],
+        "full_scale_v": ADC_FULL_SCALE_V,
+        "channels": [{"channel": c, "enabled": bool(mask >> c & 1), "code": regs[5 + c] & 0xFFF,
+                      "volts": round((regs[5 + c] & 0xFFF) * ADC_FULL_SCALE_V / ADC_CODES, 4),
+                      "count": regs[5 + c] >> 16} for c in range(ADC_CHANNELS)],
+    }
+
+
+def adc_control(ctl, req):
+    """the control register with a request's fields applied"""
+    if "run" in req:
+        ctl = ctl & ~1 | bool(req["run"])
+    if "fixed_pattern" in req:
+        ctl = ctl & ~2 | bool(req["fixed_pattern"]) << 1
+    if "calibrate" in req:
+        ctl = ctl & ~4 | bool(req["calibrate"]) << 2
+    if "mask" in req:
+        mask = int(req["mask"])
+        if not 1 <= mask <= 255:
+            raise ValueError("mask: 1 .. 255 (bit n: AINn)")
+        ctl = ctl & ~0xFF00 | mask << 8
+    if "sclk_half" in req:
+        half = int(req["sclk_half"])
+        if not 1 <= half <= 15:
+            raise ValueError("sclk_half: 1 .. 15 clocks (1 = 25 MHz)")
+        ctl = ctl & ~0xF0000 | half << 16
+    if "cs_high" in req:
+        cs = int(req["cs_high"])
+        if not ADC_CS_HIGH_MIN <= cs <= 255:
+            raise ValueError(f"cs_high: {ADC_CS_HIGH_MIN} .. 255 clocks")
+        ctl = ctl & ~0xFF000000 | cs << 24
+    return ctl & 0xFFFFFFFF
+
+
 def read_log_meta(path):
     with open(path) as f:
         return json.load(f)
@@ -2077,6 +2203,8 @@ class Access:
                 return {"ok": False, "error": str(e)}
         if op in ("scope_info", "scope_capture", "scope_stop"):
             return self.scope_op(op, req)
+        if op in ("adc", "adc_set", "adc_register"):
+            return self.adc_op(op, req)
         if op not in ("read", "read_many", "write"):
             return {"ok": False, "error": f"unknown op {op!r}"}
         with self.lock:
@@ -2128,6 +2256,55 @@ class Access:
             out = self.scope.capture(cfg, bool(req.get("force")))
             self.counts["read"] += out.get("length", 0) * SCOPE_CHANNELS // 2
             return {"ok": True, **out}
+
+    # ---- the ADC ------------------------------------------------------------
+    def adc_op(self, op, req):
+        """adc: its state; adc_set: the control register's fields (a write
+        restarts the reader); adc_register: one of the ADC's own registers,
+        written ("value") or read, only while stopped"""
+        try:
+            with self.lock:
+                if self.paused():
+                    return {"ok": False, "paused": True, "error": "paused: " + self.pause_reason}
+                if not self.fabric_ready():
+                    return {"ok": False, "paused": True, "error": "fabric not configured (no FPGA core loaded)"}
+                if not self.bridge.read(REG_FEATURES) & FEATURE_ADC:
+                    return {"ok": False, "error": "no ADC reader in this FPGA core"}
+                if op == "adc_set":
+                    self.bridge.write(A_CONTROL, adc_control(self.bridge.read(A_CONTROL), req))
+                    self.adc_last = None
+                elif op == "adc_register":
+                    if self.bridge.read(A_STATUS) & 7:
+                        return {"ok": False, "error": "the ADC reader is running: stop it first"}
+                    address = int(req["address"])
+                    if not 0 <= address <= 0xFF:
+                        raise ValueError("address: 0 .. 255")
+                    write = req.get("value") is not None
+                    word = address << 8 | (int(req["value"]) & 0xFF if write else 1 << 16)
+                    self.bridge.write(A_ACCESS, word)
+            if op == "adc_register":
+                time.sleep(0.001)                # two frames of a few us
+                with self.lock:
+                    st = self.bridge.read(A_STATUS)
+                if st & 0xF:
+                    return {"ok": False, "error": "the register access did not finish"}
+                return {"ok": True, "address": address, "written": write,
+                        "value": int(req["value"]) & 0xFF if write else st >> 8 & 0xFF}
+            with self.lock:
+                regs = [self.bridge.read(ADC_BASE + i) for i in range(ADC_REGS)]
+        except (KeyError, TypeError, ValueError) as e:
+            return {"ok": False, "error": str(e)}
+        out = adc_decode(regs)
+        now = time.monotonic()
+        last = getattr(self, "adc_last", None)
+        rate = None
+        if last and now - last[0] >= 0.2 and regs[2] >= last[1]:
+            rate = (regs[2] - last[1]) / (now - last[0])
+        if not last or now - last[0] >= 0.2 or regs[2] < last[1]:
+            self.adc_last = (now, regs[2], rate)
+        elif last:
+            rate = last[2]
+        return {"ok": True, **out, "rate": rate}
 
     # ---- the FPGA core ----------------------------------------------------
     def _core_path(self, name, suffix=""):

@@ -27,7 +27,7 @@
 --   addr 14: LEDR 3..0 brightness, a byte each (RO)
 --   addr 15: LEDR 7..4 brightness (RO)
 --   addr 16: features - bit 0 hardware blinkers, bit 1 HEX displays,
---            bit 2 oscilloscope (RO)
+--            bit 2 oscilloscope, bit 3 the TLA2518 ADC (RO)
 --   addr 17: blinker module id, four ASCII chars, 0 in modes 0/1 (RO)
 --   addr 18: board variant 0x53544400 ("STD\0"; the DE25-Nano reads 0)  (RO)
 --   addr 19: build id, Unix time of the build (build_id_pkg.vhd)  (RO)
@@ -50,6 +50,8 @@
 --            captures into a 128 MB ring in the HPS DDR over F2SDRAM / F2H
 --   addr 304..308: the data logger's decimation (scope_decimator.vhd): a
 --            point of min / max / mean per n samples into the ring
+--   addr 320..333: the TLA2518 ADC on the 2x5 header (tla2518_reader.vhd):
+--            8 channels, 12 bit, read continuously; also scope sources
 --   addr 0x8000..0xBFFF: the scope's last capture, read only (scope_block.vhd)
 --
 -- In blinker mode 0 (the reset default) LEDR[8:0] follow addr-5 bits 8..0
@@ -146,6 +148,12 @@ entity register_block is
         -- source/fan_control/max6650_fan_control.vhd)
         ;FPGA_I2C_SCL : inout std_logic
         ;FPGA_I2C_SDA : inout std_logic
+
+        -- the TLA2518 ADC (tla2518_reader.vhd)
+        ;ADC_SCK  : out std_logic
+        ;ADC_CS_n : out std_logic
+        ;ADC_SDI  : out std_logic
+        ;ADC_SDO  : in  std_logic
     );
 end entity register_block;
 
@@ -183,12 +191,13 @@ architecture rtl of register_block is
     signal blinker_mode_register : std_logic_vector(31 downto 0) := (others => '0');
     signal blinker_levels        : std_logic_vector(79 downto 0);
     signal blinker_id            : std_logic_vector(31 downto 0);
-    -- register 16: bit 0 hardware blinkers, bit 1 HEX displays
-    constant c_features : std_logic_vector(31 downto 0) := x"00000007";
+    -- register 16: bit 0 hardware blinkers, bit 1 HEX displays, bit 2 the
+    -- oscilloscope, bit 3 the ADC
+    constant c_features : std_logic_vector(31 downto 0) := x"0000000F";
 
     -- the oscilloscope's probes (scope_block.vhd): sources 8.. after its own
     -- test generator's 0..7. Names are what the web GUI shows.
-    constant c_probe_table : probe_table_array(0 to 7) := (
+    constant c_probe_table : probe_table_array(0 to 16) := (
         0 => probe_entry("fan rpm",     unsigned_probe),
         1 => probe_entry("fan tach",    unsigned_probe),
         2 => probe_entry("switches",    digital_probe),    -- SW9..0, lane n = SWn
@@ -196,9 +205,25 @@ architecture rtl of register_block is
         4 => probe_entry("LEDR",        digital_probe),    -- LEDR9..0
         5 => probe_entry("LEDR0 level", unsigned_probe),
         6 => probe_entry("LEDR9 level", unsigned_probe),
-        7 => probe_entry("fan i2c",     digital_probe));   -- 0 SCL, 1 SDA (the lines),
+        7 => probe_entry("fan i2c",     digital_probe),    -- 0 SCL, 1 SDA (the lines),
                                                            -- 2 SCL, 3 SDA driven low
-    signal probes        : scope_sample_array(0 to 7) := (others => (others => '0'));
+        -- the ADC's channels: 0..4095 over 0..AVDD (3.3 V)
+        8  => probe_entry("AIN0", unsigned_probe),
+        9  => probe_entry("AIN1", unsigned_probe),
+        10 => probe_entry("AIN2", unsigned_probe),
+        11 => probe_entry("AIN3", unsigned_probe),
+        12 => probe_entry("AIN4", unsigned_probe),
+        13 => probe_entry("AIN5", unsigned_probe),
+        14 => probe_entry("AIN6", unsigned_probe),
+        15 => probe_entry("AIN7", unsigned_probe),
+        16 => probe_entry("ADC strobes", digital_probe));  -- 0 toggles each conversion,
+                                                           -- 1 each scan of the mask
+    signal probes        : scope_sample_array(0 to 16) := (others => (others => '0'));
+
+    signal adc_bus_out   : fpga_interconnect_record := init_fpga_interconnect;
+    signal adc_values    : std_logic_vector(95 downto 0);
+    signal adc_converted, adc_scanned : boolean;
+    signal adc_strobes   : std_logic_vector(1 downto 0) := "00";
     signal scope_bus_out : fpga_interconnect_record := init_fpga_interconnect;
     signal i2c_meta, i2c_sync : std_logic_vector(1 downto 0) := "11";
 
@@ -312,8 +337,38 @@ begin
             probes(5) <= to_probe(blinker_levels(7 downto 0));
             probes(6) <= to_probe(blinker_levels(79 downto 72));
             probes(7) <= to_digital(i2c_sda_low & i2c_scl_low & i2c_sync);
+            for c in 0 to 7 loop
+                probes(8 + c) <= to_probe(unsigned(adc_values(12*c + 11 downto 12*c)));
+            end loop;
+            if adc_converted then
+                adc_strobes(0) <= not adc_strobes(0);
+            end if;
+            if adc_scanned then
+                adc_strobes(1) <= not adc_strobes(1);
+            end if;
+            probes(16) <= to_digital(adc_strobes);
         end if;
     end process scope_probes;
+
+------------------------------------------------------------------------
+    u_adc : entity work.tla2518_reader
+    generic map (
+        g_base_address => 320
+    )
+    port map (
+        clock     => core_clock
+        ,reset    => por_reset
+        ,bus_in   => bus_from_axi
+        ,bus_out  => adc_bus_out
+        ,adc_sclk => ADC_SCK
+        ,adc_cs_n => ADC_CS_n
+        ,adc_sdi  => ADC_SDI
+        ,adc_sdo  => ADC_SDO
+        ,values    => adc_values
+        ,converted => adc_converted
+        ,channel   => open
+        ,scanned   => adc_scanned
+    );
 
 ------------------------------------------------------------------------
     u_led_blinkers : entity work.led_blinkers
@@ -396,7 +451,7 @@ begin
 
             uptime_counter <= uptime_counter + 1;
 
-            bus_to_axi <= bus_from_top_axi and scope_bus_out;
+            bus_to_axi <= bus_from_top_axi and scope_bus_out and adc_bus_out;
 
             -- the button: the user registers back to their reset values
             -- (not bus_to_axi: a read in flight still gets its answer)

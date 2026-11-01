@@ -293,3 +293,12 @@ button:focus-visible, input:focus-visible, .part:focus-visible { outline: 2px so
 .log-table a { color: var(--accent); margin-right: 8px; }
 .log-table button { font-size: 12px; padding: 2px 8px; }
 .log-table .empty { color: var(--muted); }
+
+/* the ADC card */
+.adc-rows { display: grid; gap: 4px; margin: 8px 0; }
+.adc-row { display: grid; grid-template-columns: 22px 44px 1fr 74px 48px; align-items: center; gap: 8px; font-size: 13px; }
+.adc-row .bar { height: 10px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.adc-row .bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 4px; }
+.adc-row.off { color: var(--muted); }
+.adc-row.off .bar span { background: var(--muted); }
+.adc-row .num { text-align: right; font-variant-numeric: tabular-nums; }
