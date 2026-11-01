@@ -40,12 +40,14 @@
 --   addr 25: HEX segments driven, HEX3..0, 1 = lit (RO)
 --   addr 26: HEX segments driven, HEX5..4 (RO)
 --   addr 27: bits 1:0 the parity of everything the F2SDRAM / F2H buses
---            return (bridge_parity; a placeholder that keeps the two
---            buses connected until the scope's DDR writer uses them)  (RO)
+--            return (bridge_parity: the DDR writer only writes, and
+--            Quartus refuses the buses with their read data unused)  (RO)
 --   addr 256..278: the oscilloscope (scope_block.vhd; the map is the header
 --            of source/fpga_scope/source/scope_capture.vhd), 4096 samples
 --            of 8 channels, on core_clock: up to 50 MS/s. Its probes are
 --            in the table c_probe_table below.
+--   addr 288..297: the scope's DDR writer (scope_ddr_writer.vhd): deep
+--            captures into a 128 MB ring in the HPS DDR over F2SDRAM / F2H
 --   addr 0x8000..0xBFFF: the scope's last capture, read only (scope_block.vhd)
 --
 -- In blinker mode 0 (the reset default) LEDR[8:0] follow addr-5 bits 8..0
@@ -130,6 +132,13 @@ entity register_block is
 
         -- register 27: see the register map
         ;bridge_parity : in std_logic_vector(1 downto 0) := "00"
+
+        -- the scope's DDR writer (scope_block.vhd, scope_ddr_writer.vhd) on
+        -- F2SDRAM / F2H, core_clock as well
+        ;f2sdram_m2s : out t_axi256_m2s
+        ;f2sdram_s2m : in  t_axi256_s2m := c_axi256_s2m_idle
+        ;f2h_m2s     : out t_axi256_m2s
+        ;f2h_s2m     : in  t_axi256_s2m := c_axi256_s2m_idle
 
         -- MAX6650 fan controller I2C bus, open-drain (see
         -- source/fan_control/max6650_fan_control.vhd)
@@ -280,9 +289,14 @@ begin
     )
     port map (
         clock    => core_clock
+        ,reset   => por_reset
         ,bus_in  => bus_from_axi
         ,bus_out => scope_bus_out
         ,probes  => probes
+        ,f2sdram_m2s => f2sdram_m2s
+        ,f2sdram_s2m => f2sdram_s2m
+        ,f2h_m2s     => f2h_m2s
+        ,f2h_s2m     => f2h_s2m
     );
 
     scope_probes : process (core_clock) is

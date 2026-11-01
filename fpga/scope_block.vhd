@@ -20,15 +20,21 @@
 -- clock (6 clocks from request to reply here, inside the bridge's read
 -- timeout).
 --
+--   registers g_base_address + 32 .. + 41
+--                                      the DDR writer (scope_ddr_writer.vhd):
+--                                      deep capture (scope register 10 bit 0)
+--                                      goes into a ring of g_ring_records
+--                                      records in the HPS DDR, over F2SDRAM
+--                                      or F2H
+--
 -- Probes must be in this clock's domain (synchronise anything else first).
--- No deep capture: the capture port is left unconnected (phase 2 connects
--- it to the DDR writer).
 ------------------------------------------------------------------------
 library ieee;
     use ieee.std_logic_1164.all;
     use ieee.numeric_std.all;
     use work.fpga_interconnect_pkg.all;
     use work.scope_pkg.all;
+    use work.hps_axi_pkg.all;
 
 entity scope_block is
     generic (
@@ -36,13 +42,22 @@ entity scope_block is
         g_window       : natural := 16#8000#;
         g_depth        : natural := 4096;          -- samples, a power of two
         g_probes       : natural range 1 to 56;
-        g_probe_table  : probe_table_array
+        g_probe_table  : probe_table_array;
+        g_ring_records : positive := 2**23;        -- the DDR ring, 16 bytes each
+        g_burst_beats  : positive := 16;
+        g_fifo_beats   : positive := 512
     );
     port (
         clock   : in  std_logic;
+        reset   : in  std_logic := '0';            -- the DDR writer's buses idle
         bus_in  : in  fpga_interconnect_record;
         bus_out : out fpga_interconnect_record;
-        probes  : in  scope_sample_array(0 to g_probes-1)
+        probes  : in  scope_sample_array(0 to g_probes-1);
+
+        f2sdram_m2s : out t_axi256_m2s;
+        f2sdram_s2m : in  t_axi256_s2m := c_axi256_s2m_idle;
+        f2h_m2s     : out t_axi256_m2s;
+        f2h_s2m     : in  t_axi256_s2m := c_axi256_s2m_idle
     );
 end entity scope_block;
 
@@ -52,6 +67,13 @@ architecture rtl of scope_block is
 
     signal scope_bus_out  : fpga_interconnect_record := init_fpga_interconnect;
     signal window_bus_out : fpga_interconnect_record := init_fpga_interconnect;
+    signal writer_bus_out : fpga_interconnect_record := init_fpga_interconnect;
+
+    signal capture_reset, capture_write, capture_flush : boolean;
+    signal capture_data     : std_logic_vector(127 downto 0);
+    signal capture_is_full  : boolean;
+    signal capture_is_ready : boolean;
+    signal capture_written  : unsigned(31 downto 0);
 
     signal read_address : natural range 0 to window_words-1 := 0;
     signal read_data    : std_logic_vector(31 downto 0);
@@ -60,13 +82,13 @@ architecture rtl of scope_block is
 
 begin
 
-    bus_out <= scope_bus_out and window_bus_out;
+    bus_out <= scope_bus_out and window_bus_out and writer_bus_out;
 
     u_scope : entity work.scope_capture
         generic map (
             g_base_address => g_base_address,
             g_depth        => g_depth,
-            g_deep_records => 2**10,               -- no deep capture here
+            g_deep_records => g_ring_records,
             g_probes       => g_probes,
             g_probe_table  => g_probe_table
         )
@@ -77,10 +99,38 @@ begin
             probes       => probes,
             read_address => read_address,
             read_data    => read_data,
-            capture_reset   => open,
-            capture_write   => open,
-            capture_data    => open,
-            capture_flush   => open
+            capture_reset    => capture_reset,
+            capture_write    => capture_write,
+            capture_data     => capture_data,
+            capture_flush    => capture_flush,
+            capture_is_full  => capture_is_full,
+            capture_is_ready => capture_is_ready,
+            capture_written  => capture_written
+        );
+
+    u_writer : entity work.scope_ddr_writer
+        generic map (
+            g_base_address => g_base_address + 32,
+            g_ring_records => g_ring_records,
+            g_burst_beats  => g_burst_beats,
+            g_fifo_beats   => g_fifo_beats
+        )
+        port map (
+            clock            => clock,
+            reset            => reset,
+            bus_in           => bus_in,
+            bus_out          => writer_bus_out,
+            capture_reset    => capture_reset,
+            capture_write    => capture_write,
+            capture_data     => capture_data,
+            capture_flush    => capture_flush,
+            capture_is_full  => capture_is_full,
+            capture_is_ready => capture_is_ready,
+            capture_written  => capture_written,
+            f2sdram_m2s      => f2sdram_m2s,
+            f2sdram_s2m      => f2sdram_s2m,
+            f2h_m2s          => f2h_m2s,
+            f2h_s2m          => f2h_s2m
         );
 
     window : process (clock) is

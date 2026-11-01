@@ -30,6 +30,18 @@
 		/* We expect the bootloader to fill in the reg */
 		reg = <0x0 0x80000000 0x0 0x0>;
 	};
+
+	/* The oscilloscope's ring in the DDR (fpga/scope_ddr_writer.vhd,
+	 * docs/plan_scope.md phase 2): 128 MB that the kernel leaves alone and
+	 * the FPGA writes over F2SDRAM or F2H. Not no-map: it stays in the
+	 * linear map, so /dev/mem (CONFIG_STRICT_DEVMEM off) maps it cached,
+	 * or uncached (normal memory) with O_SYNC. Its size is the writer's
+	 * g_ring_records x 16 bytes. */
+	reserved-memory {
+		scope_ring: scope-ring@b0000000 {
+			reg = <0x0 0xb0000000 0x0 0x08000000>;
+		};
+	};
 };
 
 /* KSZ9031RN at MDIO address 1. Terasic uses "rgmii" (delays on the PCB),

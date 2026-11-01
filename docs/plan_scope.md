@@ -56,6 +56,47 @@ With 16-byte records gigabit Ethernet (about 118 MB/s of payload) allows about 7
   not written; the core from the card), confirmed; `gui_test.py` against the board passes,
   scope included (the sine triggers at 0, the counter steps by one over 1023 samples).
 
+## Phase 2: done (2026-11-01), on the board
+
+- FPGA: `fpga/scope_ddr_writer.vhd` takes `scope_capture`'s deep capture port (scope
+  register 10 bit 0) and writes 256 bit AXI4 bursts (16 beats, up to 8 in flight) into a
+  ring of 2^23 records (128 MB) in the HPS DDR, over F2SDRAM or F2H (register 289 bit 0),
+  with AxCACHE / AxDOMAIN / AxPROT / AxUSER from the same register. Records in memory as on
+  the Ti60: record r at ring + 16r, channel c at +2c. A capture's last odd record is
+  written with only its half strobed; `capture_written` counts records whose burst was
+  answered. A pattern fill (word i = seed + i, as fast as the bus takes it, clocks
+  counted) measures a bus without the scope. Registers 288..297 (the file's header).
+  `fpga/sim/scope_ddr_writer_tb.vhd`: an AXI memory on each bus stalling at random; a
+  record every clock (50 MS/s) never fills the FIFO.
+- Linux: `reserved-memory` `scope-ring@b0000000`, 128 MB, not no-map; the kernel without
+  `CONFIG_STRICT_DEVMEM`, so `/dev/mem` maps it cached, or uncached with `O_SYNC`.
+- `linux/tools/ddr_test.py` (on the board): per bus setting the fill's MB/s, uncached and
+  cached read MB/s, every word checked, stale cache lines after a new fill, and a deep
+  capture of the counter at 50 MS/s checked sample by sample.
+- On the board (2026-11-01, build 1793520573 in P1, `ddr_test.py --size 16 --repeat 3`):
+
+  | bus setting | write MB/s | uncached read MB/s | cached read MB/s | words wrong | stale of 16384 |
+  |---|---|---|---|---|---|
+  | F2SDRAM, AxCACHE 0010 | 1280 | ~415 | ~1250 | 0 | ~15500 |
+  | F2H, non-shareable, 0011 | 1219 | ~415 | ~1250 | 0 | ~14500 |
+  | F2H, inner shareable, 1111 | 1219 | ~415 | ~1250 | 0 | ~15500 |
+  | F2H, outer shareable, 1111 | 1219 | ~415 | ~1250 | 0 | ~15400 |
+
+  - The ring's F2SDRAM address is its HPS physical address (0xB0000000): the data lands
+    where Linux reads it, no bus errors.
+  - F2H passes the SMMU (no errors, nothing in dmesg) but is **not coherent** with any
+    AxDOMAIN / AxCACHE above, nor with AxUSER 0x00..0xFF (single bits, 0xE0, 0xFF): a
+    cached mapping keeps the old data (stale: 64 KB read cached four times, a new fill,
+    read cached again). Coherent F2H probably needs CCU / system manager setup that the
+    firmware does not do; not pursued.
+  - Writes: 1280 MB/s is 80 % of the bus's 1.6 GB/s at 50 MHz; the scope needs 800 MB/s at
+    50 MS/s. Deep captures of 8M samples (122 MB) at 50 MS/s over either bus: nothing
+    lost, the counter steps by one throughout, the FIFO never above 18 of 512 beats.
+  - Reads: uncached (`O_SYNC`) 415 MB/s, every word right: 3.5 times gigabit Ethernet's
+    118 MB/s. Cached reads are 3x faster but see stale lines.
+- **Proposed for phase 3:** F2SDRAM, read uncached from user space. Fast enough for line
+  rate, and needs no kernel driver. Cached reads plus cache invalidation would need one.
+
 ## Phases
 
 1. **Triggered scope in block RAM.** `fpga_scope` into the FPGA design on the register bus;

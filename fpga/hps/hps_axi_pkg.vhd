@@ -135,6 +135,12 @@ package hps_axi_pkg is
         bid => (others => '0'), bresp => (others => '0'), rid => (others => '0'),
         rdata => (others => '0'), rresp => (others => '0'), others => '0');
 
+    -- an idle subordinate: no ready, no valid
+    constant c_axi256_s2m_idle : t_axi256_s2m := (
+        bid => (others => '0'), bresp => (others => '0'), buser => (others => '0'),
+        rid => (others => '0'), rdata => (others => '0'), rresp => (others => '0'),
+        ruser => (others => '0'), others => '0');
+
     -- An idle manager: no valid, but bready and rready high (it would take
     -- any response). Not only good manners: the HPS has a ready-latency
     -- FIFO behind each of these buses, and with rready tied low it is never

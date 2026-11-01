@@ -119,10 +119,12 @@ architecture rtl of de25_soc_top is
     -- axi_bridge_reset port.
     signal lwh2f_bridge_reset : std_logic;
 
-    -- F2SDRAM and F2H: what they return, and its parity (register 27).
-    -- Quartus refuses an enabled bus whose outputs drive nothing; the
-    -- parity keeps them used until the scope's DDR writer is there
-    -- (docs/plan_scope.md, phase 2).
+    -- F2SDRAM and F2H: the scope's DDR writer manages them (one at a
+    -- time, scope_ddr_writer.vhd). It only writes, and Quartus refuses an
+    -- enabled bus whose read data drives nothing: the parity of all they
+    -- return keeps it used (register 27).
+    signal f2sdram_m2s   : t_axi256_m2s;
+    signal f2h_m2s       : t_axi256_m2s;
     signal f2sdram_s2m   : t_axi256_s2m;
     signal f2h_s2m       : t_axi256_s2m;
     signal bridge_parity : std_logic_vector(1 downto 0) := "00";
@@ -151,6 +153,10 @@ begin
 
             axi_bridge_reset => lwh2f_bridge_reset,
             bridge_parity    => bridge_parity,
+            f2sdram_m2s      => f2sdram_m2s,
+            f2sdram_s2m      => f2sdram_s2m,
+            f2h_m2s          => f2h_m2s,
+            f2h_s2m          => f2h_s2m,
 
             FPGA_I2C_SCL => FPGA_I2C_SCL,
             FPGA_I2C_SDA => FPGA_I2C_SDA
@@ -216,16 +222,17 @@ begin
             lwh2f_m2s   => lwh2f_m2s,
             lwh2f_s2m   => lwh2f_s2m,
 
-            -- f2sdram and fpga2hps: no manager yet - inputs idle
-            -- (c_axi256_m2s_idle), out of reset with the LWH2F bridge. A
-            -- reset held by a constant lets synthesis remove the buses'
-            -- ready-latency FIFOs, and Quartus then refuses the design
-            -- (docs/plan_scope.md, fpga/hps/README.md)
+            -- f2sdram and fpga2hps: the scope's DDR writer, out of reset
+            -- with the LWH2F bridge. A reset held by a constant lets
+            -- synthesis remove the buses' ready-latency FIFOs, and Quartus
+            -- then refuses the design (fpga/hps/README.md)
             f2sdram_clock => CLOCK0_50,
             f2sdram_reset => lwh2f_bridge_reset,
+            f2sdram_m2s   => f2sdram_m2s,
             f2sdram_s2m   => f2sdram_s2m,
             f2h_clock     => CLOCK0_50,
             f2h_reset     => lwh2f_bridge_reset,
+            f2h_m2s       => f2h_m2s,
             f2h_s2m       => f2h_s2m
         );
 

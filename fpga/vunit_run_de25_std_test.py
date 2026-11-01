@@ -70,6 +70,8 @@ for f in [
     SCOPE / "sine_table_pkg.vhd",
     SCOPE / "test_signal_generator.vhd",
     SCOPE / "scope_capture.vhd",
+    SCOPE / "scope_fifo.vhd",
+    FPGA / "scope_ddr_writer.vhd",
     FPGA / "scope_block.vhd",
     FPGA / "register_block.vhd",
     FPGA / "h2f_user0_clk_heartbeat.vhd",
@@ -79,6 +81,7 @@ for f in [
     FPGA / "sim/hex_display_tb.vhd",
     FPGA / "sim/max6650_fan_control_tb.vhd",
     FPGA / "sim/scope_block_tb.vhd",
+    FPGA / "sim/scope_ddr_writer_tb.vhd",
 ]:
     lib.add_source_files(f)
 

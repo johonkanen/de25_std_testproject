@@ -202,12 +202,18 @@ pushd "${SRC}/linux-altera" >/dev/null
     #   SPI_DESIGNWARE, SPI_DW_MMIO, SPI_SPIDEV
     #                            the LCD on SPIM0, drawn from user space
     #                            (linux/board/lcd-status.py)
+    #   STRICT_DEVMEM off        /dev/mem reaches the scope's DDR ring
+    #                            (reserved-memory, in the linear map): a
+    #                            cached or an uncached (O_SYNC) mapping
+    #                            from user space (docs/plan_scope.md phase 2)
     for c in SENSORS_SOC64 FPGA_MGR_STRATIX10_SOC FPGA_BRIDGE FPGA_REGION OF_FPGA_REGION \
              INTEL_STRATIX10_RSU RTC_DRV_PCF85363 BLK_DEV_DM DM_VERITY CRYPTO_SHA256 \
              SPI_DESIGNWARE SPI_DW_MMIO SPI_SPIDEV; do
         scripts/config --enable "CONFIG_${c}"
     done
+    scripts/config --disable CONFIG_STRICT_DEVMEM
     make olddefconfig
+    grep -q '^# CONFIG_STRICT_DEVMEM is not set$' .config || { echo "ERROR: CONFIG_STRICT_DEVMEM still set"; exit 1; }
     for c in SENSORS_SOC64 FPGA_MGR_STRATIX10_SOC FPGA_BRIDGE FPGA_REGION OF_FPGA_REGION \
              OF_OVERLAY OF_CONFIGFS INTEL_STRATIX10_RSU RTC_DRV_PCF85363 \
              BLK_DEV_DM DM_VERITY CRYPTO_SHA256 SQUASHFS SQUASHFS_ZLIB BLK_DEV_LOOP \
