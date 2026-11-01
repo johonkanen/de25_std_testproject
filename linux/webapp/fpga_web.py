@@ -645,6 +645,7 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
             length = int(self.headers.get("Content-Length", 0))
             if length > limit:
                 raise ValueError("body too large")
+            self._body_read = True
             return self.rfile.read(length)
 
         def _json_body(self):
@@ -719,6 +720,25 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                 pass
 
         def do_POST(self):
+            """every POST's body is taken off the connection, read or not: a
+            body left there (POST /api/scope/stop's "{}") became the start of
+            the next request on the kept-alive connection, which then failed
+            (the stream card's worker script did, now and then)"""
+            self._body_read = False
+            try:
+                self._post()
+            finally:
+                if not self._body_read:
+                    length = int(self.headers.get("Content-Length", 0) or 0)
+                    if 0 < length <= 1 << 20:
+                        try:
+                            self.rfile.read(length)
+                        except OSError:
+                            self.close_connection = True
+                    elif length:
+                        self.close_connection = True
+
+        def _post(self):
             p = urlparse(self.path).path
             try:
                 if p == "/api/blinker":
@@ -900,6 +920,7 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
             if length > RAUC_BUNDLE_MAX:
                 self.close_connection = True
                 raise ValueError(f"body too large ({length} bytes, at most {RAUC_BUNDLE_MAX})")
+            self._body_read = True              # receive() takes it off the connection
             try:
                 bundle = bundles.receive(self.rfile, length, self.headers.get("X-Sha256", ""))
             except OSError as e:

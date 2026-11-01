@@ -229,6 +229,66 @@ def scope_tests(page):
     check(more and stopped == "stopped", f"Run: new captures {bool(more)}; Stop: status {stopped!r}")
 
 
+def stream_tests(page):
+    """the stream card (after scope_tests' channel setup: sine, counter,
+    switches): a recorded stream at 1 MS/s, its bands drawn, the scope
+    refused meanwhile, Stop; every recorded sample's counter steps by one"""
+    info = api("/api/scope")
+    if not info or not info.get("ok") or not info.get("stream"):
+        print("SKIP  stream: no stream server")
+        return
+    if not check(wait_for(lambda: page.js('!document.getElementById("stream-card").hidden')),
+                 f"stream card shown: port {info['stream']['port']}"):
+        return
+    page.js("""(() => { const set = (id, v) => { const e = document.getElementById(id); e.value = v;
+        e.dispatchEvent(new Event("change", {bubbles: true})); };
+        set("stream-rate", "49"); set("stream-window", "2");
+        document.getElementById("stream-record").checked = true; })()""")
+    page.js('document.getElementById("stream-start").click()')
+    status = wait_for(lambda: (lambda t: t if t == "streaming" else None)(
+        page.js('document.getElementById("stream-status").textContent')), timeout=6)
+    if not check(status == "streaming", f"Start: status {status!r}"):
+        print("      " + str(page.js('document.getElementById("stream-msg").textContent')))
+    got = wait_for(lambda: page.js("stream.count >= 1500 ? stream.count : null"), timeout=10)
+    check(got, f"points arriving: {got} ms of points")
+    refused = None
+    try:
+        refused = api("/api/scope/capture", {"settings": {}})
+    except urllib.error.HTTPError as e:        # the refusal is the answer
+        refused = json.load(e)
+    check(refused and "stream" in str(refused.get("error", "")),
+          f"scope refused while streaming: {refused and refused.get('error')}")
+    drawn = page.js("""(() => { const c = document.getElementById("stream-canvas");
+        return {h: c.getBoundingClientRect().height, strips: stream.settings.chans.filter(x => x.on).length}; })()""")
+    check(drawn["strips"] == 3 and drawn["h"] > 150, f"stream drawn: {drawn['strips']} strips, "
+          f"canvas {round(drawn['h'])} px high")
+    if SHOTS:
+        page.call("Emulation.setDeviceMetricsOverride", width=1280, height=900, deviceScaleFactor=1, mobile=False)
+        page.js('document.getElementById("stream-card").scrollIntoView()')
+        time.sleep(0.5)
+        r = page.js('(r => ({x: r.x, y: r.y + scrollY, w: r.width, h: r.height}))'
+                    '(document.getElementById("stream-card").getBoundingClientRect())')
+        data = page.call("Page.captureScreenshot", format="png", captureBeyondViewport=True,
+                         clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"], "scale": 1})["data"]
+        os.makedirs(SHOTS, exist_ok=True)
+        with open(os.path.join(SHOTS, "stream.png"), "wb") as f:
+            f.write(base64.b64decode(data))
+        print(f"screenshot {os.path.join(SHOTS, 'stream.png')}")
+    page.js('document.getElementById("stream-stop").click()')
+    stopped = wait_for(lambda: (lambda t: t if t != "streaming" else None)(
+        page.js('document.getElementById("stream-status").textContent')), timeout=6)
+    check(stopped == "stopped", f"Stop: status {stopped!r}")
+    rec = page.js("""(() => { let n = 0, bad = 0, prev = null;
+        for (const b of stream.raw) { const v = new Uint16Array(b);
+            for (let i = 1; i < v.length; i += 8) {
+                if (prev !== null && ((v[i] - prev) & 0xffff) !== 1) bad++;
+                prev = v[i]; n++; } }
+        return {n, bad, save: !document.getElementById("stream-save").disabled}; })()""")
+    check(rec["n"] > 100000 and rec["bad"] == 0 and rec["save"],
+          f"recording: {rec['n']} samples, counter breaks {rec['bad']}, download offered {rec['save']}")
+    check(api("/api/scope").get("stream", {}).get("active") is False, "the board: no stream left running")
+
+
 def control_tests(page):
     """the temperature control card: plot, mode buttons, setpoint, slider"""
     c0 = api("/api/control")["state"]
@@ -513,6 +573,7 @@ try:
 
     hex_tests(page)
     scope_tests(page)
+    stream_tests(page)
     control_tests(page)
     core_tests(page)
     for b in BUNDLES:

@@ -99,6 +99,32 @@
         <span class="sub" id="scope-msg" role="status"></span>
       </div>
     </section>
+
+    <section class="card scope" id="stream-card" aria-labelledby="stream-title" hidden>
+      <div class="card-head">
+        <h2 id="stream-title">Stream <span class="sub" id="stream-sub">continuous, every sample, through the DDR</span></h2>
+        <span id="stream-status" class="pill pill-wait">stopped</span>
+      </div>
+      <div class="scope-bar">
+        <span class="scope-run">
+          <button type="button" id="stream-start" aria-pressed="false" title="Stream the channels set above">Start</button>
+          <button type="button" id="stream-stop" title="End the stream">Stop</button>
+        </span>
+        <label>Rate <select id="stream-rate"></select></label>
+        <label>Window <select id="stream-window">
+          <option value="2">2 s</option><option value="10" selected>10 s</option><option value="60">60 s</option>
+        </select></label>
+        <label title="Keep every sample in this tab, up to 1 GB, for a download"><input type="checkbox" id="stream-record"> Record</label>
+      </div>
+      <p class="sub">The channels and the generator are the oscilloscope's, set above. The oscilloscope pauses while the stream runs.</p>
+      <div class="scope-plot">
+        <canvas id="stream-canvas" role="img" aria-label="The stream: each channel's minimum and maximum per millisecond, newest on the right"></canvas>
+      </div>
+      <div class="scope-bar">
+        <button type="button" id="stream-save" class="secondary" disabled>Download recording</button>
+        <span class="sub" id="stream-msg" role="status"></span>
+      </div>
+    </section>
   </section>
 
   <aside class="panels">

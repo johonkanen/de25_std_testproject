@@ -32,9 +32,24 @@ Protocol: <run>/fpga.sock, one JSON object per line each way.
                                                 the A/B layout), then reboot into it
     {"op": "sim", "ambient": 15.0, "load": 1.0} the simulated plant (--sim only);
                                                 "fan_stuck": 1 the MAX6650 out of closed loop
+    {"op": "stream_status"}, {"op": "stream_stop"}
+                                                the scope's stream (below)
 Errors: {"ok": false, "error": "..."}; while paused every read/write answers
 {"ok": false, "error": "paused: <reason>", "paused": true}, and so does every
 read/write while the fabric is not configured (below).
+
+The scope's stream (docs/plan_scope.md, phase 3): a WebSocket on TCP port
+5004 (--stream-port; 0 for none), GET /stream?divider=D&sources=a,b,...&
+generator_hz=F. It runs the scope in continuous deep capture into the DDR
+ring (fpga/scope_ddr_writer.vhd, over F2SDRAM) and sends every record in
+order, each binary message a run of whole 16-byte records (8 int16
+channels, little-endian). One client at a time; a new one takes over. A
+client the ring laps, or records the FPGA's writer could not take, end the
+stream with a close frame (1011) that says which. The ring is read uncached
+(F2SDRAM is not coherent): each message is copied into cached memory first,
+since the kernel's own copy from uncached memory manages 18 MB/s, and the
+sending thread keeps to the A76 cores (an A55 copies at 41 MB/s, an A76 at
+460). While a stream runs, triggered captures are refused.
 
 Fabric guard (HPS-first boards): with no FPGA core loaded - the card's and
 the QSPI copy both failed - the LWH2F bridge stays in reset and an access
@@ -101,6 +116,7 @@ temp_control.py and fpga_web.py read exactly like /sys/class/hwmon.
 Stdlib only.
 """
 import argparse
+import array
 import base64
 import hashlib
 import json
@@ -158,6 +174,27 @@ S_TRIGGER_ENABLE, S_TRIGGER_UNSIGNED = 1 << 8, 1 << 9
 SCOPE_EDGES = {"rising": 0, "falling": 1, "either": 2, "pattern": 3}
 SCOPE_FORMATS = ("signed", "unsigned", "digital")
 SCOPE_WAIT_S = 0.02                    # one request waits this long for a trigger
+S_DEEP_LOST, S_DEEP_START, S_DEEP_WRITTEN = 11, 12, 22
+S_MODE_DEEP, S_MODE_CONTINUOUS = 1, 2
+S_STATE_POST = 3
+# the scope's DDR writer (fpga/scope_ddr_writer.vhd) and its ring
+# (linux/dts: reserved-memory scope-ring)
+W_RING_BASE, W_BUS, W_RING = SCOPE_BASE + 32, SCOPE_BASE + 33, SCOPE_BASE + 40
+W_BUS_F2SDRAM = 0x00E03020             # F2SDRAM, AxCACHE 0010, AxPROT 011, AxUSER 0xE0
+RING_PHYS = 0xB0000000
+RING_BYTES = 128 << 20
+RECORD_BYTES = 16                      # a sample: 8 x int16
+# the stream (StreamServer)
+STREAM_PORT = 5004
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+STREAM_MIN_DIVIDER = 4                 # 10 MS/s = 160 MB/s, beyond gigabit Ethernet already
+STREAM_CHUNK = 65536                   # records in a message at most (1 MB)
+STREAM_MIN_CHUNK = 4096                # smaller messages only after STREAM_WAIT_S
+STREAM_WAIT_S = 0.02
+STREAM_MARGIN = 2048                   # records: written bursts land before they are counted
+STREAM_SEND_TIMEOUT_S = 5.0            # a client that takes nothing for this long is dropped
+STREAM_SIM_RATE = 500_000              # --sim: samples/s at most
+STREAM_SIM_RING = 1 << 20
 LEDS = 10                          # LEDR[9:0]
 KEY_RESET_BIT = 4                  # register 7: CPU_RESET_n pressed
 WRITABLE = {REG_LOOPBACK, REG_LEDS, REG_FAN_KTACH, REG_BLINKER,
@@ -1125,6 +1162,440 @@ class ScopeSim:
                 "captures": self.captures & 0xFFFF, "data": base64.b64encode(data).decode()}
 
 
+# --------------------------------------------------------------------------
+# the stream: the scope's continuous capture, through the DDR ring, to one
+# WebSocket client on STREAM_PORT (docs/plan_scope.md, phase 3)
+# --------------------------------------------------------------------------
+class StreamEnd(Exception):
+    """why a stream stopped: sent to the client in its close frame"""
+
+    def __init__(self, reason, code=1000):
+        super().__init__(reason)
+        self.code = code
+
+
+def ws_accept(key):
+    return base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+
+
+def ws_header(length, opcode=0x2):
+    """an unmasked server frame's header, FIN set"""
+    if length < 126:
+        return struct.pack(">BB", 0x80 | opcode, length)
+    if length < 65536:
+        return struct.pack(">BBH", 0x80 | opcode, 126, length)
+    return struct.pack(">BBQ", 0x80 | opcode, 127, length)
+
+
+def stream_settings(query):
+    """the settings of a stream request (its URL's query), checked"""
+    divider = int(query.get("divider", 49))
+    if divider < STREAM_MIN_DIVIDER:
+        raise ValueError(f"divider {divider}: at least {STREAM_MIN_DIVIDER} "
+                         f"({SCOPE_CLOCK_HZ / (STREAM_MIN_DIVIDER + 1) / 1e6:.2f} MS/s)")
+    sources = [int(x) for x in query.get("sources", "7,0,1,2,3,4,5,6").split(",") if x != ""]
+    sources = (sources + list(range(len(sources), SCOPE_CHANNELS)))[:SCOPE_CHANNELS]
+    return {"divider": divider, "sources": sources,
+            "generator_hz": float(query.get("generator_hz", 1000.0))}
+
+
+class RingHw:
+    """the scope in continuous deep capture into the DDR ring, read uncached
+    (/dev/mem with O_SYNC: normal memory, not cached - F2SDRAM is not
+    coherent, docs/plan_scope.md). guard(fn) runs fn under the register
+    lock, or raises StreamEnd when register traffic is paused."""
+
+    def __init__(self, access):
+        self.access = access
+        self.b = access.bridge
+        self.mm = None
+
+    def start(self, cfg, guard):
+        def setup():
+            if not self.b.read(REG_FEATURES) & FEATURE_SCOPE:
+                raise StreamEnd("no oscilloscope in this FPGA core", 1011)
+            ring = self.b.read(W_RING)
+            if ring in (0, 0xFFFFFFFF) or ring * RECORD_BYTES > RING_BYTES:
+                raise StreamEnd("no DDR writer in this FPGA core", 1011)
+            s = lambda n, v: self.b.write(SCOPE_BASE + n, v)
+            lo = hi = 0
+            for c in range(4):
+                lo |= (cfg["sources"][c] & 0xFF) << (8 * c)
+                hi |= (cfg["sources"][c + 4] & 0xFF) << (8 * c)
+            rate = SCOPE_CLOCK_HZ / (cfg["divider"] + 1)
+            s(S_COMMAND, S_STOP)
+            self.b.write(W_RING_BASE, RING_PHYS)
+            self.b.write(W_BUS, W_BUS_F2SDRAM)
+            s(S_DIVIDER, cfg["divider"])
+            s(S_TRIGGER, 0)                      # no trigger: from the arm on
+            s(S_PRE, 0)
+            s(S_LENGTH, ring)
+            s(S_SOURCES_LO, lo)
+            s(S_SOURCES_HI, hi)
+            s(S_PHASE_STEP, int(cfg["generator_hz"] / rate * 2**32) & 0xFFFFFFFF)
+            s(S_MODE, S_MODE_DEEP | S_MODE_CONTINUOUS)
+            s(S_COMMAND, S_ARM)
+            self.access.scope.armed = None       # the triggered scope arms again after
+            return ring
+
+        if self.mm is None:
+            fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+            try:
+                self.mm = mmap.mmap(fd, RING_BYTES, mmap.MAP_SHARED, mmap.PROT_READ,
+                                    offset=RING_PHYS)
+            finally:
+                os.close(fd)
+            self.view_all = memoryview(self.mm)
+        self.ring = guard(setup)
+        until = time.monotonic() + 1.0
+        while guard(lambda: self.b.read(SCOPE_BASE + S_COMMAND)) & 7 != S_STATE_POST:
+            if time.monotonic() > until:
+                raise StreamEnd("the scope did not start", 1011)
+            time.sleep(0.001)
+        self.first = guard(lambda: self.b.read(SCOPE_BASE + S_DEEP_START))
+        self.last32 = 0
+        self.total = 0
+
+    def written(self, guard):
+        """records in memory since the start (64 bit), and why not, if not"""
+        w32, lost, status = guard(lambda: (self.b.read(SCOPE_BASE + S_DEEP_WRITTEN),
+                                           self.b.read(SCOPE_BASE + S_DEEP_LOST),
+                                           self.b.read(SCOPE_BASE + S_COMMAND)))
+        if status & 7 != S_STATE_POST:
+            raise StreamEnd("the scope stopped (another capture?)", 1011)
+        if lost:
+            raise StreamEnd(f"the DDR writer fell behind: {lost} records lost", 1011)
+        self.total += (w32 - self.last32) & 0xFFFFFFFF
+        self.last32 = w32
+        return self.total
+
+    def view(self, record, n):
+        """records record..record+n-1 of the stream (not across the ring's end)"""
+        at = (self.first + record) % self.ring * RECORD_BYTES
+        return self.view_all[at:at + n * RECORD_BYTES]
+
+    def stop(self, guard):
+        def off():
+            self.b.write(SCOPE_BASE + S_COMMAND, S_STOP)
+            self.b.write(SCOPE_BASE + S_MODE, 0)
+            self.access.scope.armed = None
+        try:
+            guard(off)
+        except StreamEnd:
+            pass
+
+
+class RingSim:
+    """the same for --sim: the test generator's waveforms and the probes
+    (ScopeSim's), made in software, at most STREAM_SIM_RATE samples/s"""
+
+    def __init__(self, access):
+        self.access = access
+        self.ring = STREAM_SIM_RING
+
+    def start(self, cfg, guard):
+        sim = self.access.scope
+        self.rate = min(SCOPE_CLOCK_HZ / (cfg["divider"] + 1), STREAM_SIM_RATE)
+        period = max(16, min(65536, round(SCOPE_CLOCK_HZ / (cfg["divider"] + 1) / cfg["generator_hz"])))
+        scfg = dict(scope_settings({}), divider=cfg["divider"], generator_hz=cfg["generator_hz"])
+        self.tables = []
+        for src in cfg["sources"]:
+            if src == 7:
+                self.tables.append(None)             # the counter
+            elif src < SCOPE_GENERATOR_SOURCES:
+                self.tables.append(array.array("h", sim._signal(src, period, scfg, 0)))
+            else:
+                self.tables.append(array.array("h", sim._signal(src, 1, scfg, 0)))
+        self.buf = bytearray(self.ring * RECORD_BYTES)
+        self.view_all = memoryview(self.buf)
+        self.first, self.made, self.t0 = 0, 0, time.monotonic()
+
+    def written(self, guard):
+        due = int((time.monotonic() - self.t0) * self.rate)
+        while self.made < due:
+            n = min(due - self.made, self.ring - self.made % self.ring, 65536)
+            k0 = self.made
+            block = array.array("h", bytes(n * RECORD_BYTES))
+            for c, table in enumerate(self.tables):
+                if table is None:
+                    col = array.array("H", ((k0 + i) & 0xFFFF for i in range(n)))
+                    block[c::SCOPE_CHANNELS] = array.array("h", col.tobytes())
+                elif len(table) == 1:
+                    block[c::SCOPE_CHANNELS] = array.array("h", table.tobytes() * n)
+                else:
+                    p = len(table)
+                    s = k0 % p
+                    reps = table[s:] + table * ((n + p) // p)
+                    block[c::SCOPE_CHANNELS] = reps[:n]
+            at = self.made % self.ring * RECORD_BYTES
+            self.buf[at:at + n * RECORD_BYTES] = block.tobytes()
+            self.made += n
+        return self.made
+
+    def view(self, record, n):
+        at = record % self.ring * RECORD_BYTES
+        return self.view_all[at:at + n * RECORD_BYTES]
+
+    def stop(self, guard):
+        pass
+
+
+class StreamServer:
+    """WebSocket on STREAM_PORT: GET /stream?divider=D&sources=a,b,..&generator_hz=F.
+    One client at a time; a new one takes over once it has sent a whole
+    request. Each binary message is a run of whole records (16 bytes: 8
+    int16 channels, little-endian), in order, nothing left out: a stream
+    that cannot keep up (the client reads too slowly and the ring laps it,
+    or the FPGA's writer falls behind) ends with a close frame saying so."""
+
+    def __init__(self, access, port):
+        self.access = access
+        self.port = port
+        self.lock = threading.Lock()
+        self.current = None                  # the session sending
+        self.last = None                     # how the last one ended
+        try:                                 # both families where there is IPv6
+            self.sock = socket.socket(socket.AF_INET6)
+        except OSError:                      # the board's kernel has none
+            self.sock = socket.socket(socket.AF_INET)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if self.sock.family == socket.AF_INET6:
+            self.sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        self.sock.bind(("", port))
+        self.sock.listen(4)
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def status(self):
+        s = self.current
+        out = {"port": self.port, "active": s is not None, "last": self.last}
+        if s is not None:
+            out.update(s.info())
+        return out
+
+    def stop(self):
+        s = self.current
+        if s is not None:
+            s.stop.set()
+            s.done.wait(3)
+
+    def _accept(self):
+        while True:
+            conn, addr = self.sock.accept()
+            threading.Thread(target=self._client, args=(conn, addr), daemon=True).start()
+
+    def _client(self, conn, addr):
+        try:
+            conn.settimeout(5)
+            req = b""
+            while b"\r\n\r\n" not in req:
+                part = conn.recv(4096)
+                if not part or len(req) > 16384:
+                    return
+                req += part
+            head = req.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+            method, target = (head[0].split(" ") + ["", ""])[:2]
+            headers = {k.strip().lower(): v.strip() for k, v in
+                       (line.split(":", 1) for line in head[1:] if ":" in line)}
+            path, _, qs = target.partition("?")
+            query = dict(p.partition("=")[::2] for p in qs.split("&") if p)
+            if method != "GET" or path != "/stream" or "websocket" not in headers.get("upgrade", "").lower():
+                log(f"stream: {addr[0]}: not a stream request: {head[0][:80]!r}")
+                body = b"the scope's stream: a WebSocket on /stream?divider=D&sources=a,b,...\n"
+                conn.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\n"
+                             b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(body), body))
+                return
+            conn.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                          "Connection: Upgrade\r\nSec-WebSocket-Accept: "
+                          f"{ws_accept(headers.get('sec-websocket-key', ''))}\r\n\r\n").encode())
+            session = StreamSession(self, conn, f"{addr[0]}:{addr[1]}")
+            try:
+                cfg = stream_settings(query)
+            except ValueError as e:
+                session.close(1008, str(e))
+                return
+            with self.lock:
+                old, self.current = self.current, session
+            if old is not None:
+                old.stop.set()
+                old.done.wait(3)
+            try:
+                session.run(cfg)
+            finally:
+                with self.lock:
+                    if self.current is session:
+                        self.current = None
+                self.last = session.info()
+        except OSError as e:
+            log(f"stream: {addr[0]}: {e}")
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+LITTLE_CORES = {"0xd03", "0xd05", "0xd46", "0xd80"}    # Cortex-A53, A55, A510, A520
+
+
+def big_cores(cpuinfo="/proc/cpuinfo"):
+    """the CPUs that are not little cores: on the Agilex 5 the two A76s.
+    An A55 copies from the uncached ring at 41 MB/s, an A76 at 460 MB/s
+    (cpu_capacity reads the same for all four: the DT does not say)"""
+    cpus, cpu = set(), None
+    try:
+        with open(cpuinfo) as f:
+            for line in f:
+                key, _, value = line.partition(":")
+                key, value = key.strip(), value.strip()
+                if key == "processor":
+                    cpu = int(value)
+                elif key == "CPU part" and cpu is not None and value.lower() not in LITTLE_CORES:
+                    cpus.add(cpu)
+    except (OSError, ValueError):
+        pass
+    return cpus
+
+
+class StreamSession:
+    def __init__(self, server, conn, peer):
+        self.server = server
+        self.access = server.access
+        self.conn = conn
+        self.peer = peer
+        self.stop = threading.Event()
+        self.done = threading.Event()
+        self.send_lock = threading.Lock()
+        self.sent = 0                        # records
+        self.started = time.monotonic()
+        self.cfg = None
+        self.ended = None
+        self.max_copy = self.max_send = 0.0     # seconds, the longest
+        self.max_behind = 0                     # records
+
+    def info(self):
+        secs = max(time.monotonic() - self.started, 1e-6)
+        return {"client": self.peer, "settings": self.cfg, "records": self.sent,
+                "seconds": round(secs, 1), "mb_per_s": round(self.sent * RECORD_BYTES / secs / 1e6, 2),
+                "ended": self.ended, "max_copy_ms": round(self.max_copy * 1e3, 1),
+                "max_send_ms": round(self.max_send * 1e3, 1), "max_behind": self.max_behind}
+
+    def close(self, code, reason):
+        payload = struct.pack(">H", code) + reason.encode()[:120]
+        try:
+            with self.send_lock:
+                self.conn.sendall(ws_header(len(payload), 0x8) + payload)
+        except OSError:
+            pass
+
+    def _reader(self):
+        """the client's frames: a close ends the stream, a ping is answered;
+        anything else (heartbeats) is read and dropped"""
+        f = self.conn.makefile("rb")
+        try:
+            while not self.stop.is_set():
+                h = f.read(2)
+                if len(h) < 2:
+                    break
+                opcode, n = h[0] & 0x0F, h[1] & 0x7F
+                if n == 126:
+                    n = struct.unpack(">H", f.read(2))[0]
+                elif n == 127:
+                    n = struct.unpack(">Q", f.read(8))[0]
+                mask = f.read(4) if h[1] & 0x80 else b"\0\0\0\0"
+                data = bytes(b ^ mask[i % 4] for i, b in enumerate(f.read(n))) if n < 4096 else f.read(n)
+                if opcode == 0x8:
+                    break
+                if opcode == 0x9:
+                    with self.send_lock:
+                        self.conn.sendall(ws_header(len(data), 0xA) + data)
+        except (OSError, ValueError, struct.error):
+            pass
+        self.stop.set()
+
+    def run(self, cfg):
+        a = self.access
+        self.cfg = cfg
+        ring = RingSim(a) if a.sim is not None else a.ring_hw
+
+        def guard(fn):
+            with a.lock:
+                if a.paused():
+                    raise StreamEnd("register traffic paused: " + a.pause_reason, 1001)
+                if not a.fabric_ready():
+                    raise StreamEnd("no FPGA core loaded", 1011)
+                return fn()
+
+        # a send timeout only: the reader waits for the client as long as it likes
+        big = big_cores()
+        if big:
+            try:
+                os.sched_setaffinity(threading.get_native_id(), big)     # this thread only
+            except OSError:
+                pass
+        self.conn.settimeout(None)
+        self.conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO,
+                             struct.pack("ll", int(STREAM_SEND_TIMEOUT_S), 0))
+        # the ring is uncached: the kernel's copy from it (8-byte loads) manages
+        # about 18 MB/s, user space's memcpy 415 MB/s; so each message is copied
+        # here into cached memory first
+        bounce = bytearray(STREAM_CHUNK * RECORD_BYTES)
+        bounce_view = memoryview(bounce)
+        a.streaming = True
+        threading.Thread(target=self._reader, daemon=True).start()
+        log(f"stream to {self.peer}: divider {cfg['divider']}, sources {cfg['sources']}")
+        try:
+            ring.start(cfg, guard)
+            last_send = time.monotonic()
+            while not self.stop.is_set():
+                total = ring.written(guard)
+                behind = total - self.sent
+                if behind > ring.ring - STREAM_MARGIN:
+                    raise StreamEnd(f"overrun: the client fell {behind} records behind "
+                                    f"(the ring holds {ring.ring})", 1011)
+                if behind == 0 or (behind < STREAM_MIN_CHUNK
+                                   and time.monotonic() - last_send < STREAM_WAIT_S):
+                    time.sleep(0.002)
+                    continue
+                n = min(behind, STREAM_CHUNK, ring.ring - (ring.first + self.sent) % ring.ring)
+                size = n * RECORD_BYTES
+                t_copy = time.monotonic()
+                bounce_view[:size] = ring.view(self.sent, n)
+                t_send = time.monotonic()
+                with self.send_lock:
+                    self.conn.sendall(ws_header(size))
+                    self.conn.sendall(bounce_view[:size])
+                t_done = time.monotonic()
+                self.max_copy = max(self.max_copy, t_send - t_copy)
+                self.max_send = max(self.max_send, t_done - t_send)
+                self.max_behind = max(self.max_behind, behind)
+                # still the records it was meant to be, not the next lap's?
+                after = ring.written(guard)
+                if after + STREAM_MARGIN > self.sent + ring.ring:
+                    raise StreamEnd(f"overrun: the ring lapped the records being sent "
+                                    f"(written {after}, sent {self.sent}, register "
+                                    f"0x{getattr(ring, 'last32', 0):08x})", 1011)
+                self.sent += n
+                last_send = time.monotonic()
+            self.ended = "stopped"
+            self.close(1000, "stopped")
+        except StreamEnd as e:
+            self.ended = str(e)
+            log(f"stream to {self.peer} ended: {e}")
+            self.close(e.code, str(e))
+        except OSError as e:
+            self.ended = f"connection: {e}"
+            log(f"stream to {self.peer} ended: {e}")
+        finally:
+            ring.stop(guard)
+            a.streaming = False
+            self.stop.set()
+            self.done.set()
+            i = self.info()
+            log(f"stream to {self.peer}: {self.sent} records, {i['mb_per_s']} MB/s; longest copy "
+                f"{i['max_copy_ms']} ms, send {i['max_send_ms']} ms; at most {self.max_behind} "
+                f"records behind")
+
+
 class Access:
     """Every register access, under one lock; pause/resume; the fan lease;
     loading the FPGA core."""
@@ -1148,6 +1619,9 @@ class Access:
         self.leases = {}                    # reg -> monotonic deadline
         self.counts = {"read": 0, "write": 0, "lease_expired": 0, "guard_refused": 0}
         self.scope = ScopeSim(bridge) if isinstance(bridge, SimBridge) else ScopeHw(bridge)
+        self.ring_hw = None if isinstance(bridge, SimBridge) else RingHw(self)
+        self.stream = None                  # the StreamServer, if any (main)
+        self.streaming = False              # a stream has the scope
         self._fabric_ok = None              # the fabric guard (above): last answer
         self._fabric_checked = 0.0
         threading.Thread(target=self._watchdog, daemon=True).start()
@@ -1238,6 +1712,14 @@ class Access:
                 return self.install_core(str(req["bundle"]), bool(req.get("force")))
             finally:
                 self.core_lock.release()
+        if op == "stream_status":
+            if self.stream is None:
+                return {"ok": False, "error": "no stream server"}
+            return {"ok": True, **self.stream.status()}
+        if op == "stream_stop":
+            if self.stream is not None:
+                self.stream.stop()
+            return {"ok": True}
         if op in ("scope_info", "scope_capture", "scope_stop"):
             return self.scope_op(op, req)
         if op not in ("read", "read_many", "write"):
@@ -1280,7 +1762,11 @@ class Access:
             if not self.bridge.read(REG_FEATURES) & FEATURE_SCOPE:
                 return {"ok": False, "error": "no oscilloscope in this FPGA core"}
             if op == "scope_info":
-                return {"ok": True, **self.scope.info()}
+                return {"ok": True, **self.scope.info(),
+                        "stream": self.stream.status() if self.stream else None}
+            if self.streaming:
+                return {"ok": False, "streaming": True,
+                        "error": "the scope is streaming (stop the stream first)"}
             if op == "scope_stop":
                 self.scope.stop()
                 return {"ok": True}
@@ -1762,6 +2248,8 @@ def main():
                     "/lib/firmware, or <run>/sim-firmware with --sim)")
     ap.add_argument("--boot", default=None, help="the card's FAT partition, where the core's "
                     "boot copy goes (default /boot, or <run>/sim-boot with --sim; '' for none)")
+    ap.add_argument("--stream-port", type=int, default=STREAM_PORT,
+                    help=f"the scope's stream, a WebSocket (default {STREAM_PORT}; 0: none)")
     ap.add_argument("--client", nargs=argparse.REMAINDER,
                     help="send one request: read N | write N V | status | pause S | resume | "
                          "sim ambient=V load=V | ping | core | reload | install_core BUNDLE [force]")
@@ -1817,6 +2305,12 @@ def main():
     if args.sim:
         slot = None
     access = Access(bridge, sim, loader, firmware, boot, slot)
+    if args.stream_port:
+        try:
+            access.stream = StreamServer(access, args.stream_port)
+            log(f"stream on port {args.stream_port}")
+        except OSError as e:
+            log(f"stream: port {args.stream_port}: {e}")
     srv = serve(access, os.path.join(run, SOCKET_NAME))
     log(f"serving {os.path.join(run, SOCKET_NAME)}" + (" [simulated board]" if sim else ""))
     srv.serve_forever()

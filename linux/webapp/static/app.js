@@ -860,6 +860,7 @@ async function initScope() {
   window.addEventListener("resize", drawScope);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawScope);
   drawScope();
+  initStream(info);
 }
 
 function scopeEdgeShown() {
@@ -1215,6 +1216,224 @@ drawPlots();
 buildPanels();
 buildLedBar();
 loadBoard().then(connect);
+// ---------------------------------------------------------------- stream
+// The scope's continuous capture through the DDR ring, a WebSocket on the board's
+// port 5004 (fpga_access.py StreamServer), read in stream_worker.js. Each channel's
+// minimum and maximum per millisecond, the last 60 s kept, drawn as a band.
+const STREAM_DIVIDERS = [4, 5, 6, 7, 9, 12, 19, 24, 49, 99, 249, 499, 999, 4999];
+const STREAM_POINTS = 60000;
+const STREAM_RECORD_MAX = 1 << 30;
+const stream = {
+  worker: null, on: false, settings: null, pts: null, count: 0, bytes: 0, samples: 0,
+  t0: 0, raw: [], rawBytes: 0, rawFull: false, drawPending: false, timer: null,
+};
+
+function initStream(info) {
+  if (!info.stream) return;                   // no stream server on this board
+  $("stream-card").hidden = false;
+  $("stream-rate").innerHTML = STREAM_DIVIDERS.map((d) => {
+    const hz = info.clock_hz / (d + 1);
+    return `<option value="${d}">${fmtRate(hz)}, ${+(hz * 16 / 1e6).toFixed(1)} MB/s</option>`;
+  }).join("");
+  $("stream-rate").value = localStorage.getItem("de25-stream-rate") || "49";
+  if (!$("stream-rate").value) $("stream-rate").value = "49";
+  $("stream-rate").onchange = () => localStorage.setItem("de25-stream-rate", $("stream-rate").value);
+  $("stream-start").onclick = streamStart;
+  $("stream-stop").onclick = streamStop;
+  $("stream-save").onclick = streamSave;
+  $("stream-window").onchange = drawStream;
+  $("stream-record").onchange = () => {
+    if (stream.worker) stream.worker.postMessage({ type: "raw", on: $("stream-record").checked });
+  };
+  window.addEventListener("resize", drawStream);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawStream);
+  drawStream();
+}
+
+function setStreamStatus(kind, text) {
+  const el = $("stream-status");
+  el.className = "pill pill-" + kind;
+  el.textContent = text;
+}
+
+async function streamStart() {
+  if (stream.on) return;
+  if (scope.running) await scopeStop();
+  const s = scopeSettings(), info = scope.info;
+  const divider = +$("stream-rate").value, rate = info.clock_hz / (divider + 1);
+  const chans = s.sources.map((src, c) => {
+    const p = info.sources[src] || { name: "?", format: "signed" };
+    return { on: +$(`scope-src${c}`).value >= 0, name: p.name, format: p.format };
+  });
+  stream.settings = { divider, rate, chans, pps: Math.min(1000, rate) };
+  stream.pts = chans.map(() => ({ min: new Float32Array(STREAM_POINTS), max: new Float32Array(STREAM_POINTS) }));
+  Object.assign(stream, { count: 0, bytes: 0, samples: 0, raw: [], rawBytes: 0, rawFull: false });
+  $("stream-save").disabled = true;
+  const host = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
+  const url = `ws://${host}:${info.stream.port}/stream?divider=${divider}` +
+    `&sources=${s.sources.join(",")}&generator_hz=${s.generator_hz}`;
+  const w = new Worker("/static/stream_worker.js");
+  stream.worker = w;
+  w.onmessage = (e) => streamMessage(e.data);
+  w.onerror = (e) => {
+    $("stream-msg").textContent = `the stream's worker: ${e.message || "failed"}`;
+    streamMessage({ type: "closed", code: 1006, reason: e.message || "worker failed" });
+  };
+  w.postMessage({ type: "raw", on: $("stream-record").checked });
+  w.postMessage({ type: "start", url, rate, unsigned: chans.map((c) => c.format !== "signed") });
+  stream.on = true;
+  stream.t0 = performance.now();
+  $("stream-start").setAttribute("aria-pressed", "true");
+  setStreamStatus("wait", "connecting");
+  $("stream-msg").textContent = "";
+  stream.timer = setInterval(streamStats, 500);
+}
+
+function streamStop() {
+  if (stream.worker) stream.worker.postMessage({ type: "stop" });
+}
+
+function streamMessage(m) {
+  if (m.type === "open") {
+    setStreamStatus("ok", "streaming");
+    stream.t0 = performance.now();
+  } else if (m.type === "points") {
+    const v = m.values, pts = stream.pts;
+    for (let i = 0; i < m.count; i++) {
+      const at = (stream.count + i) % STREAM_POINTS;
+      for (let c = 0; c < SCOPE_CH; c++) {
+        pts[c].min[at] = v[i * 16 + 2 * c];
+        pts[c].max[at] = v[i * 16 + 2 * c + 1];
+      }
+    }
+    stream.count += m.count;
+    stream.bytes = m.bytes;
+    stream.samples = m.samples;
+    if (!stream.drawPending) {
+      stream.drawPending = true;
+      requestAnimationFrame(() => { stream.drawPending = false; drawStream(); });
+    }
+  } else if (m.type === "raw") {
+    if (stream.rawBytes + m.buffer.byteLength <= STREAM_RECORD_MAX) {
+      stream.raw.push(m.buffer);
+      stream.rawBytes += m.buffer.byteLength;
+    } else if (!stream.rawFull) {
+      stream.rawFull = true;
+      stream.worker.postMessage({ type: "raw", on: false });
+    }
+  } else if (m.type === "closed") {
+    stream.on = false;
+    stream.worker.terminate();
+    stream.worker = null;
+    clearInterval(stream.timer);
+    streamStats();
+    $("stream-start").setAttribute("aria-pressed", "false");
+    $("stream-save").disabled = stream.rawBytes === 0;
+    const clean = m.code === 1000;
+    setStreamStatus(clean ? "wait" : "bad", clean ? "stopped" : "ended");
+    if (!clean) {
+      $("stream-msg").textContent += ` - ${m.reason || "the connection closed (" + m.code + ")"}`;
+    }
+  }
+}
+
+function streamStats() {
+  const secs = Math.max(1e-3, (performance.now() - stream.t0) / 1000);
+  let t = `${(stream.bytes / secs / 1e6).toFixed(1)} MB/s received, ${stream.samples.toLocaleString()} samples in ${secs.toFixed(1)} s`;
+  if (stream.rawBytes) t += `; ${(stream.rawBytes / 1e6).toFixed(0)} MB recorded` + (stream.rawFull ? " (full)" : "");
+  $("stream-msg").textContent = t;
+}
+
+function streamSave() {
+  const st = stream.settings;
+  const blob = new Blob(stream.raw, { type: "application/octet-stream" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  // int16 little-endian, 8 channels interleaved
+  a.download = `de25_stream_${Math.round(st.rate)}Sps_${st.chans.map((c) => c.name.replace(/\W+/g, "-")).join("_")}.i16`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+function drawStream() {
+  const canvas = $("stream-canvas");
+  if (!canvas || !scope.info) return;
+  const st = stream.settings;
+  const strips = [];
+  let y = 6;
+  for (let c = 0; c < SCOPE_CH; c++) {
+    const on = st ? st.chans[c].on : +$(`scope-src${c}`).value >= 0;
+    if (!on) continue;
+    strips.push({ c, y, h: STRIP_H });
+    y += STRIP_H + STRIP_GAP;
+  }
+  const height = y + AXIS_H;
+  const w = canvas.clientWidth || 600, dpr = window.devicePixelRatio || 1;
+  canvas.style.height = height + "px";
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(height * dpr);
+  const g = canvas.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, height);
+  const text = cssVar("--text"), muted = cssVar("--muted"), grid = cssVar("--grid"), line = cssVar("--line");
+  const x0 = LABEL_W, x1 = w - 8, bottom = height - AXIS_H;
+  g.font = "12px system-ui, sans-serif";
+  if (!st || stream.count === 0) {
+    g.fillStyle = muted;
+    g.textAlign = "center";
+    g.fillText(stream.on ? "Waiting for data" : "Press Start to stream", (x0 + x1) / 2, height / 2);
+    return;
+  }
+  const win = +$("stream-window").value, wp = Math.min(STREAM_POINTS, Math.round(win * st.pps));
+  const newest = stream.count - 1, oldest = Math.max(0, stream.count - wp, stream.count - STREAM_POINTS);
+  const X = (j) => x1 - ((newest - j) / Math.max(1, wp - 1)) * (x1 - x0);
+  // time grid: seconds before now
+  const step = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20].find((v) => v >= win / Math.max(1, (x1 - x0) / 90)) || 20;
+  g.strokeStyle = grid; g.lineWidth = 1; g.fillStyle = muted; g.textAlign = "center";
+  for (let t = 0; t <= win + 1e-9; t += step) {
+    const x = x1 - (t / win) * (x1 - x0);
+    g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, bottom); g.stroke();
+    g.textAlign = t === 0 ? "right" : "center";
+    g.fillText(t === 0 ? "now" : `-${+t.toFixed(1)} s`, x, bottom + 15);
+  }
+  const cols = Math.max(1, Math.round(x1 - x0));
+  for (const s of strips) {
+    const p = stream.pts[s.c], color = chColor(s.c), ch = st.chans[s.c];
+    g.strokeStyle = line;
+    g.beginPath(); g.moveTo(x0, s.y + s.h + 0.5); g.lineTo(x1, s.y + s.h + 0.5); g.stroke();
+    g.strokeStyle = color; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(4, s.y + 9); g.lineTo(18, s.y + 9); g.stroke();
+    g.lineWidth = 1;
+    g.fillStyle = text; g.textAlign = "left";
+    g.fillText(`CH${s.c + 1}`, 24, s.y + 13);
+    g.fillStyle = muted;
+    g.fillText(ch.name.slice(0, 14), 4, s.y + 28);
+    // each pixel column's points into one min/max
+    const lo = new Float32Array(cols).fill(Infinity), hi = new Float32Array(cols).fill(-Infinity);
+    let vlo = Infinity, vhi = -Infinity;
+    for (let j = oldest; j <= newest; j++) {
+      const k = Math.min(cols - 1, Math.max(0, Math.round(X(j) - x0)));
+      const at = j % STREAM_POINTS, a = p.min[at], b = p.max[at];
+      if (a < lo[k]) lo[k] = a;
+      if (b > hi[k]) hi[k] = b;
+      if (a < vlo) vlo = a;
+      if (b > vhi) vhi = b;
+    }
+    if (vhi - vlo < 2) { vlo -= 1; vhi += 1; }
+    const pad = (vhi - vlo) * 0.08, top = s.y + 3, bot = s.y + s.h - 3;
+    const Y = (v) => bot - ((v - (vlo - pad)) / (vhi - vlo + 2 * pad)) * (bot - top);
+    g.fillStyle = muted; g.textAlign = "right";
+    g.fillText(String(vhi), LABEL_W - 6, top + 9);
+    g.fillText(String(vlo), LABEL_W - 6, bot);
+    g.fillStyle = color;
+    for (let k = 0; k < cols; k++) {
+      if (hi[k] < lo[k]) continue;
+      const ya = Y(hi[k]), yb = Y(lo[k]);
+      g.fillRect(x0 + k, ya, 1, Math.max(1.5, yb - ya));
+    }
+  }
+}
+
 initScope();
 loadVersion().catch((e) => { $("release-msg").textContent = "Version unknown: " + e.message; });
 loadCoreInfo().catch((e) => { $("core-msg").textContent = "Core unknown: " + e.message; });

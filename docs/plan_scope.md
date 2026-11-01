@@ -97,6 +97,51 @@ With 16-byte records gigabit Ethernet (about 118 MB/s of payload) allows about 7
 - **Proposed for phase 3:** F2SDRAM, read uncached from user space. Fast enough for line
   rate, and needs no kernel driver. Cached reads plus cache invalidation would need one.
 
+## Phase 3: done (2026-11-01), on the board
+
+- **The stream server is in `fpga_access.py`** (the process that maps `/dev/mem` anyway),
+  a WebSocket on port 5004: `GET /stream?divider=D&sources=...`.
+  - It arms the scope in continuous deep capture (mode 3, no trigger) over F2SDRAM.
+  - It sends the ring's records in order, as binary messages of up to 1 MB.
+  - Register 22 (records answered by the bus) is read before and after each message.
+  - A client the ring laps, or records the writer could not take, end the stream with a
+    1011 close frame that says which (as the Ti60's overrun reset did, but with a reason).
+- **Three things found on the board** set the rate:
+  1. The kernel's copy from the uncached mapping (`sendall` straight from the mmap) manages
+     **18 MB/s**: it reads 8 bytes at a time. Each message is now copied into a cached
+     buffer in user space first (memcpy: 460 MB/s), then sent.
+  2. The HPS has two Cortex-A55 and two A76 cores, and the A55s copy from uncached memory
+     at **41 MB/s** against the A76s' 460. A sender that the scheduler moved to an A55 fell
+     behind until the ring lapped it. The sending thread is now pinned to the A76s (from
+     `/proc/cpuinfo`: `cpu_capacity` reads the same for all four).
+  3. The PC-side checker (`test_stream.py`) had to parse frames in place to keep up.
+- **Results** (`linux/tools/test_stream.py`, every sample's counter checked):
+
+  | rate | produced | received | run | errors | furthest behind |
+  |---|---|---|---|---|---|
+  | 1 MS/s | 16 MB/s | 15.0 MB/s | 8 s | 0 | - |
+  | 3.85 MS/s | 61.5 MB/s | 58.7 MB/s | 20 s | 0 | 20 K records |
+  | 5 MS/s | 80 MB/s | 76.4 MB/s | 2 x 20 s | 0 | 22 K |
+  | 6.25 MS/s | 100 MB/s | 95.7 MB/s | 20 s | 0 | 273 K |
+  | **7.14 MS/s** | **114 MB/s** | 108.6 MB/s | 20 s | 0 | 23 K |
+  | **7.14 MS/s** | **114 MB/s** | 109.0 MB/s | **120 s, 818 M samples** | **0** | 77 K |
+
+  "Received" counts from the connect, so it reads a few % low; the board's own figure for
+  the 120 s run is 114.28 MB/s. The ring holds 8.4 M records (1.2 s at 7.14 MS/s), so even
+  the furthest behind was under a tenth of it. 8.33 MS/s (133 MB/s) is beyond gigabit
+  Ethernet and overruns in about 3 s. The board's CPU stays mostly idle.
+- **The GUI**: a Stream card after the scope card. It streams the scope card's channels and
+  generator at 0.01-10 MS/s. `static/stream_worker.js` (after the Ti60's
+  `collect_worker.js`) reads the WebSocket and reduces it to per-millisecond min/max. The
+  card draws bands over a 2, 10 or 60 s window. Record keeps the raw messages in the tab (up
+  to 1 GB) for a download (`.i16`: int16 little-endian, 8 channels interleaved).
+  `gui_test.py` streams at 1 MS/s with recording on, checks that the scope is refused
+  meanwhile, and checks every recorded sample's counter (2.25 M samples, 0 breaks).
+- **Fixed on the way**: `fpga_web.py` left a POST's unread body (`/api/scope/stop`'s `{}`)
+  on the kept-alive connection, where it became the start of the next request. The stream
+  card's worker script failed to load about one time in two. Every POST's body is now taken
+  off the connection.
+
 ## Phases
 
 1. **Triggered scope in block RAM.** `fpga_scope` into the FPGA design on the register bus;
