@@ -125,6 +125,33 @@
         <span class="sub" id="stream-msg" role="status"></span>
       </div>
     </section>
+
+    <section class="card scope" id="log-card" aria-labelledby="log-title" hidden>
+      <div class="card-head">
+        <h2 id="log-title">Data logger <span class="sub">every sample into points of minimum, maximum and mean, to the board's card</span></h2>
+        <span id="log-status" class="pill pill-wait">idle</span>
+      </div>
+      <div class="scope-bar">
+        <span class="scope-run">
+          <button type="button" id="log-start" aria-pressed="false" title="Log the channels set above">Start</button>
+          <button type="button" id="log-stop" title="End the log">Stop</button>
+        </span>
+        <label>Rate <select id="log-rate"></select></label>
+        <label>For <select id="log-duration">
+          <option value="">until stopped</option><option value="60">1 min</option><option value="600">10 min</option>
+          <option value="3600">1 h</option><option value="28800">8 h</option><option value="86400">24 h</option>
+        </select></label>
+        <label>Label <input id="log-label" type="text" size="14" maxlength="40" placeholder="optional"></label>
+      </div>
+      <p class="sub">The channels and the generator are the oscilloscope's, set above. A log keeps running with no browser open; the scope and the stream wait until it ends.</p>
+      <p class="sub" id="log-msg" role="status"></p>
+      <div class="log-table-wrap">
+        <table class="log-table" id="log-table">
+          <thead><tr><th>Started (UTC)</th><th>Label</th><th>Rate</th><th>Length</th><th>Size</th><th>State</th><th>Download</th><th></th></tr></thead>
+          <tbody id="log-rows"></tbody>
+        </table>
+      </div>
+    </section>
   </section>
 
   <aside class="panels">

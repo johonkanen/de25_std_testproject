@@ -10,7 +10,10 @@
 -- Bursts are at most g_burst_beats beats and never cross a multiple of
 -- g_burst_beats beats (so never a 4 KB boundary, nor the ring's end). A
 -- capture's last odd record goes out as a beat with only its low 16 bytes
--- strobed: nothing past the capture is written. Several bursts may be in
+-- strobed: nothing past the capture is written. Beats that have waited
+-- g_flush_clocks for a burst to fill go out as a shorter one (a slow
+-- stream, the data logger's points): whole beats only, a lone record
+-- waits for its pair. Several bursts may be in
 -- flight; capture_written counts the records whose burst the bus has
 -- answered (the B response), so they are in memory.
 --
@@ -54,7 +57,8 @@ entity scope_ddr_writer is
         g_ring_records    : positive;           -- power of two, >= 2*g_burst_beats
         g_burst_beats     : positive := 16;     -- power of two, at most 128 (4 KB)
         g_fifo_beats      : positive := 512;    -- power of two
-        g_max_outstanding : positive := 8       -- bursts in flight, at most 15
+        g_max_outstanding : positive := 8;      -- bursts in flight, at most 15
+        g_flush_clocks    : positive := 2**20   -- a beat's longest wait for a burst (21 ms)
     );
     port (
         clock   : in  std_logic;
@@ -68,6 +72,7 @@ entity scope_ddr_writer is
         capture_data     : in  std_logic_vector(127 downto 0);
         capture_flush    : in  boolean;
         capture_is_full  : out boolean;
+        capture_almost_full : out boolean;   -- no room for 4 more records
         capture_is_ready : out boolean;
         capture_written  : out unsigned(31 downto 0);
 
@@ -131,6 +136,7 @@ architecture rtl of scope_ddr_writer is
     signal burst_records : count_array := (others => 0);
     signal rq_head, rq_tail : natural range 0 to g_max_outstanding := 0;
     signal written       : unsigned(31 downto 0) := (others => '0');
+    signal waited        : natural range 0 to g_flush_clocks := 0;   -- clocks beats have waited
 
     signal m   : t_axi256_m2s := c_axi256_m2s_idle;
     signal s   : t_axi256_s2m;
@@ -180,6 +186,7 @@ begin
     f2h_m2s     <= m when use_f2h else c_axi256_m2s_idle;
 
     capture_is_full  <= fifo_count >= g_fifo_beats - 1;
+    capture_almost_full <= fifo_count >= g_fifo_beats - 4;
     capture_is_ready <= not restarting;
     capture_written  <= written;
 
@@ -361,7 +368,8 @@ begin
                         burst_pattern <= true;
                     end if;
                 elsif not restarting then
-                    if avail >= room or (capture_flush and avail > 0) then
+                    if avail >= room or (capture_flush and avail > 0)
+                       or (waited >= g_flush_clocks and avail > 0) then
                         len := minimum(avail, room);
                         start := true;
                         burst_pattern <= false;
@@ -378,6 +386,11 @@ begin
                 v_in_flight := v_in_flight + 1;
             end if;
             in_flight <= v_in_flight;
+            if start or avail = 0 then
+                waited <= 0;
+            elsif waited < g_flush_clocks then
+                waited <= waited + 1;
+            end if;
 
             ------------------------------------------------------------
             -- the pattern fill: starts when nothing else is going on

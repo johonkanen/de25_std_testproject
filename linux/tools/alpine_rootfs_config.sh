@@ -50,6 +50,7 @@ cat > "${ROOT}/etc/inittab" << 'EOF'
 ::sysinit:/bin/mount -t sysfs sysfs /sys
 ::sysinit:/sbin/e2fsck -p /dev/mmcblk0p6
 ::sysinit:/bin/mount /data
+::sysinit:/usr/sbin/grow-data
 ::sysinit:/bin/mkdir -p /dev/pts
 ::sysinit:/bin/mount -t devpts devpts /dev/pts
 ::sysinit:/etc/rc.local
@@ -67,6 +68,8 @@ EOF
 # devpts: ssh sessions need ptys. dropbear: -F foreground (init respawns
 # it), -E log to stderr, -R make host keys on first use, -s no passwords:
 # keys only (SSH_KEYS).
+# grow-data: /data to the end of the card (only sizes change, then an online
+# resize2fs); does nothing once it is there.
 # Shutdown: busybox init runs these before it kills anything itself, so
 # stop every process first. With files open for writing, `umount -a -r`
 # cannot make / read-only, every reboot then resets a read-write root, and
@@ -141,6 +144,9 @@ install -D -m 755 "${TOOLS}/../board/eth-watchdog.sh" "${ROOT}/usr/sbin/eth-watc
 # RSU boot confirmation (plan F5): an image that does not come up healthy
 # falls back (linux/board/rsu-confirm.sh)
 install -D -m 755 "${TOOLS}/../board/rsu-confirm.sh" "${ROOT}/usr/sbin/rsu-confirm"
+# /data grown to the end of the card at boot, once (linux/board/grow-data.py):
+# room for the data logger's files
+install -D -m 755 "${TOOLS}/../board/grow-data.py" "${ROOT}/usr/sbin/grow-data"
 # the board's address on the LCD module (linux/board/lcd-status.py)
 install -D -m 755 "${TOOLS}/../board/lcd-status.py" "${ROOT}/usr/sbin/lcd-status"
 

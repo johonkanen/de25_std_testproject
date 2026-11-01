@@ -861,6 +861,7 @@ async function initScope() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawScope);
   drawScope();
   initStream(info);
+  initLogger();
 }
 
 function scopeEdgeShown() {
@@ -1432,6 +1433,112 @@ function drawStream() {
       g.fillRect(x0 + k, ya, 1, Math.max(1.5, yb - ya));
     }
   }
+}
+
+// ---------------------------------------------------------------- data logger
+// fpga_access.py logs points (each channel's minimum, maximum and mean over n
+// samples, fpga/scope_decimator.vhd) to the board's card; this starts and
+// stops it and lists the files (GET /api/logs).
+const LOG_RATES = [0.1, 1, 10, 100, 1000, 10000, 100000];
+const LOG_POINT_BYTES = 64;
+const logger = { timer: null, last: null, error: "" };
+
+function fmtBytes(b) {
+  if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
+  if (b >= 1e6) return `${(b / 1e6).toFixed(1)} MB`;
+  if (b >= 1e3) return `${(b / 1e3).toFixed(0)} kB`;
+  return `${b} B`;
+}
+function fmtDuration(s) {
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
+  return `${(s / 86400).toFixed(1)} days`;
+}
+const fmtPoints = (r) => (r >= 1000 ? `${r / 1000} k` : `${r} `) + "points/s";
+
+async function initLogger() {
+  let r;
+  try { r = await api("/api/logs"); } catch (e) { return; }      // no logger on this board
+  $("log-card").hidden = false;
+  $("log-rate").innerHTML = LOG_RATES.map((v) => `<option value="${v}">${fmtPoints(v)}</option>`).join("");
+  $("log-rate").value = localStorage.getItem("de25-log-rate") || "1000";
+  if (!$("log-rate").value) $("log-rate").value = "1000";
+  $("log-rate").onchange = () => { localStorage.setItem("de25-log-rate", $("log-rate").value); showLogs(logger.last); };
+  $("log-start").onclick = logStart;
+  $("log-stop").onclick = logStop;
+  showLogs(r);
+  logger.timer = setInterval(refreshLogs, 2000);
+}
+
+async function refreshLogs() {
+  try { showLogs(await api("/api/logs")); } catch (e) { /* the next one */ }
+}
+
+async function logStart() {
+  if (scope.running) await scopeStop();
+  if (stream.on) streamStop();
+  const s = scopeSettings();
+  const settings = {
+    rate: +$("log-rate").value, sources: s.sources, generator_hz: s.generator_hz,
+    label: $("log-label").value.trim(),
+    max_seconds: $("log-duration").value ? +$("log-duration").value : null,
+  };
+  try {
+    await api("/api/logs/start", { settings });
+    logger.error = "";
+  } catch (e) {
+    logger.error = e.message;
+  }
+  refreshLogs();
+}
+
+async function logStop() {
+  try { await api("/api/logs/stop", {}); } catch (e) { logger.error = e.message; }
+  refreshLogs();
+}
+
+async function logDelete(name) {
+  if (!confirm(`Delete ${name}?`)) return;
+  try { await api("/api/logs/delete", { name }); } catch (e) { logger.error = e.message; }
+  refreshLogs();
+}
+
+function showLogs(r) {
+  if (!r) return;
+  logger.last = r;
+  const st = r.status, cur = st.active ? st.current : null;
+  const pill = $("log-status");
+  pill.className = "pill pill-" + (cur ? "ok" : "wait");
+  pill.textContent = cur ? "logging" : "idle";
+  $("log-start").setAttribute("aria-pressed", String(!!cur));
+  const free = st.free_bytes - st.reserve_bytes;
+  const rate = cur ? cur.rate : +$("log-rate").value;
+  const room = `${fmtBytes(Math.max(0, free))} free on the card: ${fmtDuration(Math.max(0, free) / (rate * LOG_POINT_BYTES))} at ${fmtPoints(+rate.toPrecision(6))}`;
+  let msg = room;
+  if (cur) {
+    const secs = Date.now() / 1000 - cur.started;
+    msg = `${cur.name}: ${cur.points.toLocaleString()} points, ${fmtBytes(cur.bytes)} in ${fmtDuration(secs)}; ${room}`;
+  }
+  $("log-msg").textContent = logger.error ? `${logger.error} - ${msg}` : msg;
+  const rows = r.logs.map((l) => {
+    const secs = l.points / l.rate;
+    const state = l.state === "done" ? "done" : l.state;
+    const enc = encodeURIComponent(l.name);
+    return `<tr data-name="${l.name}"><td>${l.started_utc.replace("T", " ").replace("Z", "")}</td>` +
+      `<td>${escapeHtml(l.label || "")}</td><td class="num">${fmtPoints(+l.rate.toPrecision(6))}</td>` +
+      `<td class="num">${fmtDuration(secs)}</td><td class="num">${fmtBytes(l.bytes)}</td>` +
+      `<td title="${escapeHtml(l.end_reason || "")}">${state}</td>` +
+      `<td><a href="/api/logs/${enc}.csv" download>CSV</a><a href="/api/logs/${enc}.i16" download>raw</a>` +
+      `<a href="/api/logs/${enc}.json" download>json</a></td>` +
+      `<td>${l.state === "running" ? "" : `<button type="button" class="secondary" data-delete="${l.name}">Delete</button>`}</td></tr>`;
+  });
+  $("log-rows").innerHTML = rows.join("") || `<tr><td colspan="8" class="empty">No logs yet</td></tr>`;
+  for (const b of $("log-rows").querySelectorAll("button[data-delete]")) b.onclick = () => logDelete(b.dataset.delete);
+}
+
+function escapeHtml(t) {
+  return String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 initScope();

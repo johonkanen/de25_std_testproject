@@ -34,6 +34,8 @@ Protocol: <run>/fpga.sock, one JSON object per line each way.
                                                 "fan_stuck": 1 the MAX6650 out of closed loop
     {"op": "stream_status"}, {"op": "stream_stop"}
                                                 the scope's stream (below)
+    {"op": "log_start", "settings": {...}}, {"op": "log_stop"}, {"op": "log_status"}
+                                                the data logger (below)
 Errors: {"ok": false, "error": "..."}; while paused every read/write answers
 {"ok": false, "error": "paused: <reason>", "paused": true}, and so does every
 read/write while the fabric is not configured (below).
@@ -50,6 +52,16 @@ stream with a close frame (1011) that says which. The ring is read uncached
 since the kernel's own copy from uncached memory manages 18 MB/s, and the
 sending thread keeps to the A76 cores (an A55 copies at 41 MB/s, an A76 at
 460). While a stream runs, triggered captures are refused.
+
+The data logger (docs/plan_scope.md, phase 4): the scope in continuous deep
+capture with fpga/scope_decimator.vhd enabled, so the ring gets a point
+every n samples (each channel's minimum, maximum and mean, and the point's
+number: 64 bytes). A thread copies the points into <--logs>/<name>.i16 and
+describes the log in <name>.json; it fsyncs every second and stops on
+log_stop, the set duration, or less than 64 MB left. No page needs to be
+open. A log that a restart cut short is marked "interrupted" at the next
+start and trimmed to whole points. The triggered scope, the stream and a
+log exclude each other (Access.owner).
 
 Fabric guard (HPS-first boards): with no FPGA core loaded - the card's and
 the QSPI copy both failed - the LWH2F bridge stays in reset and an access
@@ -195,6 +207,16 @@ STREAM_MARGIN = 2048                   # records: written bursts land before the
 STREAM_SEND_TIMEOUT_S = 5.0            # a client that takes nothing for this long is dropped
 STREAM_SIM_RATE = 500_000              # --sim: samples/s at most
 STREAM_SIM_RING = 1 << 20
+# the data logger (fpga/scope_decimator.vhd: a point = min, max, mean records)
+D_ENABLE, D_N, D_FORMATS, D_POINTS, D_LOST = (SCOPE_BASE + 48 + i for i in range(5))
+DECIMATE_N_MIN, DECIMATE_N_MAX = 64, 1 << 26
+POINT_BYTES = 4 * RECORD_BYTES        # min, max, mean, the point's number (scope_decimator.vhd)
+LOG_DIR = "/data/logs"
+LOG_MIN_RATE, LOG_MAX_RATE = 0.1, 100_000.0   # points/s; the card takes ~10 MB/s
+LOG_RESERVE_BYTES = 64 << 20           # a log stops before /data has less than this
+LOG_POLL_S = 0.1
+LOG_META_S = 5.0                       # its .json rewritten this often while it runs
+LOG_SIM_RATE = 500                     # --sim: points/s at most
 LEDS = 10                          # LEDR[9:0]
 KEY_RESET_BIT = 4                  # register 7: CPU_RESET_n pressed
 WRITABLE = {REG_LOOPBACK, REG_LEDS, REG_FAN_KTACH, REG_BLINKER,
@@ -1210,7 +1232,8 @@ class RingHw:
         self.b = access.bridge
         self.mm = None
 
-    def start(self, cfg, guard):
+    def start(self, cfg, guard, decimate=None):
+        """decimate: {"n", "formats"} for the logger's points, None for samples"""
         def setup():
             if not self.b.read(REG_FEATURES) & FEATURE_SCOPE:
                 raise StreamEnd("no oscilloscope in this FPGA core", 1011)
@@ -1233,6 +1256,14 @@ class RingHw:
             s(S_SOURCES_LO, lo)
             s(S_SOURCES_HI, hi)
             s(S_PHASE_STEP, int(cfg["generator_hz"] / rate * 2**32) & 0xFFFFFFFF)
+            if decimate:
+                self.b.write(D_N, decimate["n"])
+                self.b.write(D_FORMATS, decimate["formats"])
+                if self.b.read(D_N) != decimate["n"]:
+                    raise StreamEnd("no decimator in this FPGA core (an older core)", 1011)
+                self.b.write(D_ENABLE, 1)
+            else:
+                self.b.write(D_ENABLE, 0)
             s(S_MODE, S_MODE_DEEP | S_MODE_CONTINUOUS)
             s(S_COMMAND, S_ARM)
             self.access.scope.armed = None       # the triggered scope arms again after
@@ -1252,7 +1283,10 @@ class RingHw:
             if time.monotonic() > until:
                 raise StreamEnd("the scope did not start", 1011)
             time.sleep(0.001)
-        self.first = guard(lambda: self.b.read(SCOPE_BASE + S_DEEP_START))
+        # the ring record of the first sample: 1 (a sample goes in before the
+        # "trigger" one), but decimated the ring holds points' records, and
+        # point 0 (that sample its first) starts at record 0
+        self.first = 0 if decimate else guard(lambda: self.b.read(SCOPE_BASE + S_DEEP_START))
         self.last32 = 0
         self.total = 0
 
@@ -1293,7 +1327,7 @@ class RingSim:
         self.access = access
         self.ring = STREAM_SIM_RING
 
-    def start(self, cfg, guard):
+    def start(self, cfg, guard, decimate=None):
         sim = self.access.scope
         self.rate = min(SCOPE_CLOCK_HZ / (cfg["divider"] + 1), STREAM_SIM_RATE)
         period = max(16, min(65536, round(SCOPE_CLOCK_HZ / (cfg["divider"] + 1) / cfg["generator_hz"])))
@@ -1540,7 +1574,13 @@ class StreamSession:
         # here into cached memory first
         bounce = bytearray(STREAM_CHUNK * RECORD_BYTES)
         bounce_view = memoryview(bounce)
-        a.streaming = True
+        with a.lock:
+            if a.owner == "log":
+                self.ended = "a log is running"
+                self.close(1013, "the scope is busy: a log is running")
+                self.done.set()
+                return
+            a.owner = "stream"
         threading.Thread(target=self._reader, daemon=True).start()
         log(f"stream to {self.peer}: divider {cfg['divider']}, sources {cfg['sources']}")
         try:
@@ -1587,13 +1627,311 @@ class StreamSession:
             log(f"stream to {self.peer} ended: {e}")
         finally:
             ring.stop(guard)
-            a.streaming = False
+            if a.owner == "stream":
+                a.owner = None
             self.stop.set()
             self.done.set()
             i = self.info()
             log(f"stream to {self.peer}: {self.sent} records, {i['mb_per_s']} MB/s; longest copy "
                 f"{i['max_copy_ms']} ms, send {i['max_send_ms']} ms; at most {self.max_behind} "
                 f"records behind")
+
+
+# --------------------------------------------------------------------------
+# the data logger: decimated points (fpga/scope_decimator.vhd) from the DDR
+# ring into files on /data (docs/plan_scope.md, phase 4)
+# --------------------------------------------------------------------------
+def logs_dir(run, sim):
+    return os.path.join(run, "sim-logs") if sim else LOG_DIR
+
+
+def log_plan(rate):
+    """(divider, n, the exact rate) for points/s: the scope's input at the
+    full 50 MS/s while n fits, so every clock's sample is in a point"""
+    rate = float(rate)
+    if not LOG_MIN_RATE <= rate <= LOG_MAX_RATE:
+        raise ValueError(f"rate {rate:g} points/s: {LOG_MIN_RATE:g} .. {LOG_MAX_RATE:g}")
+    divider = max(0, math.ceil(SCOPE_CLOCK_HZ / (rate * DECIMATE_N_MAX)) - 1)
+    n = min(DECIMATE_N_MAX, max(DECIMATE_N_MIN, round(SCOPE_CLOCK_HZ / (divider + 1) / rate)))
+    return divider, n, SCOPE_CLOCK_HZ / (divider + 1) / n
+
+
+def log_formats(sources, info):
+    """the decimator's formats register: 2 bits a channel"""
+    word = 0
+    for c, s in enumerate(sources):
+        f = info["sources"][s]["format"] if s < len(info["sources"]) else "signed"
+        word |= SCOPE_FORMATS.index(f) << (2 * c)
+    return word
+
+
+def read_log_meta(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def write_log_meta(path, meta):
+    tmp = path + ".new"
+    with open(tmp, "w") as f:
+        json.dump(meta, f, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def list_logs(directory):
+    """every log's description, newest first"""
+    out = []
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return out
+    for n in names:
+        if n.endswith(".json"):
+            try:
+                out.append(read_log_meta(os.path.join(directory, n)))
+            except (OSError, ValueError):
+                pass
+    return sorted(out, key=lambda m: m.get("started", 0), reverse=True)
+
+
+def recover_logs(directory):
+    """logs a restart cut short: their files trimmed to whole points"""
+    for meta in list_logs(directory):
+        if meta.get("state") != "running":
+            continue
+        data = os.path.join(directory, meta["name"] + ".i16")
+        try:
+            size = os.path.getsize(data) // POINT_BYTES * POINT_BYTES
+            os.truncate(data, size)
+        except OSError:
+            size = 0
+        meta.update(state="interrupted", end_reason="fpga_access.py stopped while it ran",
+                    points=size // POINT_BYTES, bytes=size)
+        write_log_meta(os.path.join(directory, meta["name"] + ".json"), meta)
+        log(f"log {meta['name']}: interrupted, {meta['points']} points kept")
+
+
+class RingSimPoints:
+    """--sim: points made in software from ScopeSim's signals, at most
+    LOG_SIM_RATE points/s (a few samples of each point's window stand for
+    all of them)"""
+
+    def __init__(self, access):
+        self.access = access
+        self.ring = STREAM_SIM_RING
+
+    def start(self, cfg, guard, decimate=None):
+        self.rate = min(cfg["rate"], LOG_SIM_RATE)
+        self.window = (cfg["divider"] + 1) * decimate["n"]          # clocks a point
+        self.scfg = dict(scope_settings({}), divider=0, generator_hz=cfg["generator_hz"])
+        self.cfg, self.formats = cfg, decimate["formats"]
+        self.buf = bytearray(self.ring * RECORD_BYTES)
+        self.view_all = memoryview(self.buf)
+        self.first, self.made, self.t0 = 0, 0, time.monotonic()
+
+    def written(self, guard):
+        sim = self.access.scope
+        due = int((time.monotonic() - self.t0) * self.rate)
+        while self.made < due * 4:
+            p = self.made // 4
+            recs = [[0] * SCOPE_CHANNELS for _ in range(4)]
+            recs[3][:6] = [p >> 16, p & 0xFFFF, 0, 0, self.cfg["n"] >> 16, self.cfg["n"] & 0xFFFF]
+            for c, src in enumerate(self.cfg["sources"]):
+                xs = [sim._signal(src, 1, self.scfg, p * self.window + k * self.window // 8)[0]
+                      for k in range(8)]
+                if (self.formats >> (2 * c)) & 3:
+                    xs = [x & 0xFFFF for x in xs]
+                recs[0][c], recs[1][c], recs[2][c] = min(xs), max(xs), round(sum(xs) / len(xs))
+            for r in recs:
+                at = self.made % self.ring * RECORD_BYTES
+                struct.pack_into("<8H", self.buf, at, *(x & 0xFFFF for x in r))
+                self.made += 1
+        return self.made
+
+    def view(self, record, n):
+        at = record % self.ring * RECORD_BYTES
+        return self.view_all[at:at + n * RECORD_BYTES]
+
+    def stop(self, guard):
+        pass
+
+
+class LogSession:
+    """one log: the scope in continuous deep capture, decimated, its points
+    copied from the ring into <dir>/<name>.i16 (64 bytes a point: the
+    minimum, maximum and mean records of 8 int16 channels, and the point's
+    number), described by <name>.json. Points the writer had no room for
+    are lost whole and counted; the numbers say where."""
+
+    def __init__(self, access, directory, cfg, info):
+        self.access = access
+        self.dir = directory
+        self.cfg = cfg
+        self.stop = threading.Event()
+        self.done = threading.Event()
+        started = time.time()
+        label = re.sub(r"[^A-Za-z0-9_-]+", "-", cfg.get("label", "")).strip("-")[:40]
+        self.name = time.strftime("log-%Y%m%d-%H%M%S", time.gmtime(started)) + (f"-{label}" if label else "")
+        self.data_path = os.path.join(directory, self.name + ".i16")
+        self.meta_path = os.path.join(directory, self.name + ".json")
+        sources = [{"source": s, "name": info["sources"][s]["name"] if s < len(info["sources"]) else "?",
+                    "format": info["sources"][s]["format"] if s < len(info["sources"]) else "signed"}
+                   for s in cfg["sources"]]
+        self.meta = {
+            "name": self.name, "label": cfg.get("label", ""), "state": "running",
+            "started": started, "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
+            "rate": cfg["rate"], "divider": cfg["divider"], "n": cfg["n"],
+            "input_rate": SCOPE_CLOCK_HZ / (cfg["divider"] + 1),
+            "channels": sources, "generator_hz": cfg["generator_hz"],
+            "max_seconds": cfg.get("max_seconds"),
+            "layout": "a point is 64 bytes: 4 records of 8 little-endian 16-bit channels - "
+                      "minimum, maximum, mean (int16; digital channels: AND, OR, last sample), "
+                      "then uint16 words: the point's number (high, low), the points lost "
+                      "before it (high, low), n (high, low), 0, 0",
+            "point_bytes": POINT_BYTES, "points": 0, "bytes": 0, "lost": 0,
+            "ended": None, "end_reason": None,
+        }
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def info(self):
+        return dict(self.meta)
+
+    def _run(self):
+        a = self.access
+        ring = RingSimPoints(a) if a.sim is not None else a.ring_hw
+        reason, state = "stopped", "done"
+
+        def guard(fn):
+            with a.lock:
+                if a.paused():
+                    raise StreamEnd("register traffic paused: " + a.pause_reason)
+                if not a.fabric_ready():
+                    raise StreamEnd("no FPGA core loaded")
+                return fn()
+
+        big = big_cores()
+        if big:
+            try:
+                os.sched_setaffinity(threading.get_native_id(), big)
+            except OSError:
+                pass
+        bounce = bytearray(STREAM_CHUNK * RECORD_BYTES)
+        bv = memoryview(bounce)
+        done = 0                                 # records in the file
+        try:
+            write_log_meta(self.meta_path, self.meta)
+            with open(self.data_path, "wb") as out:
+                ring.start(self.cfg, guard, decimate={"n": self.cfg["n"], "formats": self.cfg["formats"]})
+                t_sync = t_meta = time.monotonic()
+                t_end = (t_sync + self.cfg["max_seconds"]) if self.cfg.get("max_seconds") else None
+                while not self.stop.wait(LOG_POLL_S):
+                    total = ring.written(guard)
+                    if a.sim is None:
+                        self.meta["lost"] = guard(lambda: a.bridge.read(D_LOST))
+                    if total - done > ring.ring - STREAM_MARGIN:
+                        raise StreamEnd("overrun: the card fell behind the ring")
+                    while done < total:
+                        n = min(total - done, STREAM_CHUNK, ring.ring - (ring.first + done) % ring.ring)
+                        size = n * RECORD_BYTES
+                        bv[:size] = ring.view(done, n)
+                        out.write(bv[:size])
+                        done += n
+                    now = time.monotonic()
+                    if now - t_sync >= 1.0:
+                        out.flush()
+                        os.fsync(out.fileno())
+                        t_sync = now
+                        st = os.statvfs(self.dir)
+                        if st.f_bavail * st.f_frsize < LOG_RESERVE_BYTES:
+                            reason = f"the disk is full (less than {LOG_RESERVE_BYTES >> 20} MB left)"
+                            break
+                    self.meta["points"] = done * RECORD_BYTES // POINT_BYTES
+                    self.meta["bytes"] = self.meta["points"] * POINT_BYTES
+                    if now - t_meta >= LOG_META_S:
+                        write_log_meta(self.meta_path, self.meta)
+                        t_meta = now
+                    if t_end is not None and now >= t_end:
+                        reason = "the set duration"
+                        break
+                out.flush()
+                os.fsync(out.fileno())
+        except StreamEnd as e:
+            reason, state = str(e), "failed"
+        except OSError as e:
+            reason, state = f"file: {e}", "failed"
+        finally:
+            ring.stop(guard)
+            if a.sim is None:
+                try:
+                    guard(lambda: a.bridge.write(D_ENABLE, 0))
+                except StreamEnd:
+                    pass
+            try:
+                size = os.path.getsize(self.data_path) // POINT_BYTES * POINT_BYTES
+                os.truncate(self.data_path, size)
+            except OSError:
+                size = 0
+            self.meta.update(state=state, end_reason=reason, ended=time.time(),
+                             points=size // POINT_BYTES, bytes=size)
+            try:
+                write_log_meta(self.meta_path, self.meta)
+            except OSError:
+                pass
+            a.owner = None
+            self.done.set()
+            log(f"log {self.name} {state}: {reason}; {self.meta['points']} points")
+
+
+class Logger:
+    def __init__(self, access, directory):
+        self.access = access
+        self.dir = directory
+        self.current = None
+        os.makedirs(directory, exist_ok=True)
+        recover_logs(directory)
+
+    def status(self):
+        st = os.statvfs(self.dir)
+        s = self.current
+        return {"active": s is not None and not s.done.is_set(), "dir": self.dir,
+                "current": s.info() if s else None,
+                "free_bytes": st.f_bavail * st.f_frsize, "reserve_bytes": LOG_RESERVE_BYTES,
+                "rates": [LOG_MIN_RATE, LOG_MAX_RATE]}
+
+    def start(self, req):
+        a = self.access
+        settings = req.get("settings", {})
+        divider, n, rate = log_plan(settings.get("rate", 1000))
+        sources = [int(x) for x in settings.get("sources", range(SCOPE_CHANNELS))][:SCOPE_CHANNELS]
+        sources = [max(0, s) for s in sources] + list(range(len(sources), SCOPE_CHANNELS))
+        max_seconds = settings.get("max_seconds")
+        with a.lock:                         # the names' table is read over LWH2F
+            info = a.scope.info()
+        cfg = {"rate": rate, "divider": divider, "n": n, "sources": sources,
+               "generator_hz": float(settings.get("generator_hz", 1000.0)),
+               "label": str(settings.get("label", "")),
+               "max_seconds": float(max_seconds) if max_seconds else None,
+               "formats": log_formats(sources, info)}
+        with a.lock:
+            if a.owner is not None:
+                return {"ok": False, "error": f"the scope is busy: a {a.owner} is running"}
+            a.owner = "log"
+        st = os.statvfs(self.dir)
+        if st.f_bavail * st.f_frsize < 2 * LOG_RESERVE_BYTES:
+            a.owner = None
+            return {"ok": False, "error": "the disk is full"}
+        self.current = LogSession(a, self.dir, cfg, info)
+        self.current.thread.start()
+        log(f"log {self.current.name}: {rate:g} points/s (divider {divider}, n {n}), sources {sources}")
+        return {"ok": True, **self.status()}
+
+    def stop(self):
+        s = self.current
+        if s is not None:
+            s.stop.set()
+            s.done.wait(10)
+        return {"ok": True, **self.status()}
 
 
 class Access:
@@ -1621,7 +1959,8 @@ class Access:
         self.scope = ScopeSim(bridge) if isinstance(bridge, SimBridge) else ScopeHw(bridge)
         self.ring_hw = None if isinstance(bridge, SimBridge) else RingHw(self)
         self.stream = None                  # the StreamServer, if any (main)
-        self.streaming = False              # a stream has the scope
+        self.owner = None                   # who has the scope: None, "stream", "log"
+        self.logger = None                  # the Logger (main)
         self._fabric_ok = None              # the fabric guard (above): last answer
         self._fabric_checked = 0.0
         threading.Thread(target=self._watchdog, daemon=True).start()
@@ -1720,6 +2059,22 @@ class Access:
             if self.stream is not None:
                 self.stream.stop()
             return {"ok": True}
+        if op in ("log_start", "log_stop", "log_status"):
+            if self.logger is None:
+                return {"ok": False, "error": "no data logger"}
+            if op == "log_status":
+                return {"ok": True, **self.logger.status()}
+            if op == "log_stop":
+                return self.logger.stop()
+            try:
+                with self.lock:
+                    if self.paused() or not self.fabric_ready():
+                        return {"ok": False, "error": "no FPGA core / register traffic paused"}
+                    if not self.bridge.read(REG_FEATURES) & FEATURE_SCOPE:
+                        return {"ok": False, "error": "no oscilloscope in this FPGA core"}
+                return self.logger.start(req)
+            except (TypeError, ValueError) as e:
+                return {"ok": False, "error": str(e)}
         if op in ("scope_info", "scope_capture", "scope_stop"):
             return self.scope_op(op, req)
         if op not in ("read", "read_many", "write"):
@@ -1764,9 +2119,9 @@ class Access:
             if op == "scope_info":
                 return {"ok": True, **self.scope.info(),
                         "stream": self.stream.status() if self.stream else None}
-            if self.streaming:
+            if self.owner is not None:
                 return {"ok": False, "streaming": True,
-                        "error": "the scope is streaming (stop the stream first)"}
+                        "error": f"the scope is busy: a {self.owner} is running (stop it first)"}
             if op == "scope_stop":
                 self.scope.stop()
                 return {"ok": True}
@@ -2248,6 +2603,8 @@ def main():
                     "/lib/firmware, or <run>/sim-firmware with --sim)")
     ap.add_argument("--boot", default=None, help="the card's FAT partition, where the core's "
                     "boot copy goes (default /boot, or <run>/sim-boot with --sim; '' for none)")
+    ap.add_argument("--logs", default=None, help=f"the data logger's files (default {LOG_DIR}, "
+                    "or <run>/sim-logs with --sim)")
     ap.add_argument("--stream-port", type=int, default=STREAM_PORT,
                     help=f"the scope's stream, a WebSocket (default {STREAM_PORT}; 0: none)")
     ap.add_argument("--client", nargs=argparse.REMAINDER,
@@ -2305,6 +2662,10 @@ def main():
     if args.sim:
         slot = None
     access = Access(bridge, sim, loader, firmware, boot, slot)
+    try:
+        access.logger = Logger(access, args.logs or logs_dir(run, args.sim))
+    except OSError as e:
+        log(f"data logger: {e}")
     if args.stream_port:
         try:
             access.stream = StreamServer(access, args.stream_port)

@@ -26,6 +26,10 @@
 --                                      goes into a ring of g_ring_records
 --                                      records in the HPS DDR, over F2SDRAM
 --                                      or F2H
+--   registers g_base_address + 48 .. + 52
+--                                      the data logger's decimation
+--                                      (scope_decimator.vhd), between the
+--                                      scope and the DDR writer
 --
 -- Probes must be in this clock's domain (synchronise anything else first).
 ------------------------------------------------------------------------
@@ -68,10 +72,17 @@ architecture rtl of scope_block is
     signal scope_bus_out  : fpga_interconnect_record := init_fpga_interconnect;
     signal window_bus_out : fpga_interconnect_record := init_fpga_interconnect;
     signal writer_bus_out : fpga_interconnect_record := init_fpga_interconnect;
+    signal decimator_bus_out : fpga_interconnect_record := init_fpga_interconnect;
+
+    -- the capture port: scope -> decimator -> writer
+    signal w_reset, w_write, w_flush : boolean;
+    signal w_data       : std_logic_vector(127 downto 0);
+    signal w_almost_full : boolean;
 
     signal capture_reset, capture_write, capture_flush : boolean;
     signal capture_data     : std_logic_vector(127 downto 0);
     signal capture_is_full  : boolean;
+    signal writer_is_full   : boolean;
     signal capture_is_ready : boolean;
     signal capture_written  : unsigned(31 downto 0);
 
@@ -82,7 +93,7 @@ architecture rtl of scope_block is
 
 begin
 
-    bus_out <= scope_bus_out and window_bus_out and writer_bus_out;
+    bus_out <= scope_bus_out and window_bus_out and writer_bus_out and decimator_bus_out;
 
     u_scope : entity work.scope_capture
         generic map (
@@ -108,6 +119,25 @@ begin
             capture_written  => capture_written
         );
 
+    u_decimator : entity work.scope_decimator
+        generic map (g_base_address => g_base_address + 48)
+        port map (
+            clock           => clock,
+            bus_in          => bus_in,
+            bus_out         => decimator_bus_out,
+            in_reset        => capture_reset,
+            in_write        => capture_write,
+            in_data         => capture_data,
+            in_flush        => capture_flush,
+            in_is_full      => capture_is_full,
+            out_reset       => w_reset,
+            out_write       => w_write,
+            out_data        => w_data,
+            out_flush       => w_flush,
+            out_is_full     => writer_is_full,
+            out_almost_full => w_almost_full
+        );
+
     u_writer : entity work.scope_ddr_writer
         generic map (
             g_base_address => g_base_address + 32,
@@ -120,11 +150,12 @@ begin
             reset            => reset,
             bus_in           => bus_in,
             bus_out          => writer_bus_out,
-            capture_reset    => capture_reset,
-            capture_write    => capture_write,
-            capture_data     => capture_data,
-            capture_flush    => capture_flush,
-            capture_is_full  => capture_is_full,
+            capture_reset    => w_reset,
+            capture_write    => w_write,
+            capture_data     => w_data,
+            capture_flush    => w_flush,
+            capture_is_full  => writer_is_full,
+            capture_almost_full => w_almost_full,
             capture_is_ready => capture_is_ready,
             capture_written  => capture_written,
             f2sdram_m2s      => f2sdram_m2s,

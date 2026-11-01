@@ -39,7 +39,10 @@ order) and restarted by the supervisor:
 
 `fpga_access.py` also serves the scope's stream itself, a WebSocket on port
 5004 straight from the DDR ring (its docstring, `docs/plan_scope.md` phase
-3): 114 MB/s does not go through the other two.
+3): 114 MB/s does not go through the other two. The data logger runs there
+too (phase 4), a thread that copies the decimated ring into
+`/data/logs/<name>.i16` and keeps going with no page open. The triggered
+scope, the stream and a log exclude each other.
 
 Both sockets speak one JSON object per line each way (the protocols are in
 the docstrings of `fpga_access.py` and `temp_control.py`); both have a
@@ -168,6 +171,8 @@ its own: the lease is the only net when the loop dies.
 | `../tools/rauc_handler_test.py` | `/api/bundle` and the RAUC post-install handler against the same supervisor (a stand-in for `rauc install`) |
 | `../tools/gui_test.py` | drives the page in headless Chromium: every blinker, an LED click, the HEX card, the loop, the fan slider, `--reload-core`, screenshots |
 | `../tools/test_stream.py` | the scope's stream end to end from the PC (numpy): every sample of the counter checked, the rate received, per sample rate |
+| `../tools/test_logger.py` | the data logger end to end from the PC (numpy): a log per rate, every point's counter minimum, maximum and mean and its number checked |
+| `../board/grow-data.py` | at boot (inittab, after `/data` is mounted): `/data`, the card's last partition, grown once to the end of the card (sizes in the MBR and EBR only, then an online `resize2fs`) |
 | `../tools/ddr_test.py` | on the board: the DDR writer's buses measured (write and read MB/s, coherency) and a deep capture checked |
 
 ## Install (once)
@@ -255,6 +260,11 @@ supervisor on the host (busybox `sh`, `--sim`, a layout in `/tmp/d25s`).
 | `POST /api/scope/capture` `{"settings": {...}, "force": false}` | one capture: arms when the settings changed, waits 20 ms for the trigger; `{"done": false}` if none yet (ask again), else `length`, `pre`, `forced` and `data` (base64, int16 little-endian, 8 channels interleaved) |
 | `POST /api/scope/stop` | stop the capture |
 | `ws://BOARD:5004/stream?divider=D&sources=a,b,...&generator_hz=F` | the scope's stream (`fpga_access.py`, not `fpga_web.py`): every sample, binary messages of whole 16-byte records (8 int16 channels, little-endian); ends with a close frame saying why. `GET /api/scope` has its `stream` status (port, the client, MB/s, how the last one ended). While it runs, `/api/scope/capture` answers 400 |
+| `GET /api/logs` | the data logger: `status` (running or not, the current log, free space on `/data`) and `logs`: every log's description, newest first |
+| `POST /api/logs/start` `{"settings": {"rate": 1000, "sources": [...], "generator_hz": F, "label": "...", "max_seconds": S}}` | a log of `rate` points a second (0.1 to 100 000), each point the minimum, maximum and mean of every sample since the last (50 MS/s in while n fits 2^26). It runs until stopped, the duration, or less than 64 MB left. 400 while the stream or another log runs |
+| `POST /api/logs/stop` | stop it |
+| `GET /api/logs/<name>.i16`, `.json`, `.csv` | a log's points (64 bytes each: 4 records of 8 little-endian 16-bit channels - minimum, maximum, mean, then the point's number, the points lost before it and n), its description (`layout` says the same), or CSV (time from the point's number, then min, max and mean of each channel) |
+| `POST /api/logs/delete` `{"name": "log-..."}` | delete a log (not the running one) |
 | `GET /api/version` | release running, previous, on test, `board` |
 | `POST /api/bundle` | body: a signed RAUC bundle `.raucb`; headers `X-Sha256`, `X-Token`. Starts `rauc install` (202); a GUI release, a core and/or an image (then a reboot into it) |
 | `GET /api/bundle` | that install: `running`, `rc`, `log`, `reboot` |

@@ -289,6 +289,68 @@ def stream_tests(page):
     check(api("/api/scope").get("stream", {}).get("active") is False, "the board: no stream left running")
 
 
+def logger_tests(page):
+    """the data logger card: a labelled log at 100 points/s, the stream
+    refused meanwhile, Stop; its row, the CSV's rows match its points, Delete"""
+    try:
+        r = api("/api/logs")
+    except (OSError, ValueError) as e:
+        print(f"SKIP  data logger: {e}")
+        return
+    if not check(wait_for(lambda: page.js('!document.getElementById("log-card").hidden')),
+                 f"logger card shown: {len(r['logs'])} logs, {r['status']['free_bytes'] >> 20} MB free"):
+        return
+    label = f"gui-test-{int(time.time()) % 100000}"
+    page.js(f"""(() => {{ const set = (id, v) => {{ const e = document.getElementById(id); e.value = v;
+        e.dispatchEvent(new Event("change", {{bubbles: true}})); }};
+        set("log-rate", "100"); set("log-duration", ""); set("log-label", "{label}"); }})()""")
+    page.js('document.getElementById("log-start").click()')
+    status = wait_for(lambda: (lambda t: t if t == "logging" else None)(
+        page.js('document.getElementById("log-status").textContent')), timeout=8)
+    if not check(status == "logging", f"Start: status {status!r}"):
+        print("      " + str(page.js('document.getElementById("log-msg").textContent')))
+        return
+    # the stream waits while a log runs
+    page.js('document.getElementById("stream-start").click()')
+    ended = wait_for(lambda: (lambda t: t if t in ("ended", "stopped") else None)(
+        page.js('document.getElementById("stream-status").textContent')), timeout=8)
+    msg = page.js('document.getElementById("stream-msg").textContent')
+    check(ended == "ended" and "log" in (msg or ""), f"stream refused while logging: {ended!r}, {msg!r}")
+    time.sleep(3)
+    page.js('document.getElementById("log-stop").click()')
+    idle = wait_for(lambda: (lambda t: t if t == "idle" else None)(
+        page.js('document.getElementById("log-status").textContent')), timeout=15)
+    check(idle == "idle", f"Stop: status {idle!r}")
+    logs = [l for l in api("/api/logs")["logs"] if l.get("label") == label]
+    log = logs[0] if logs else None
+    check(log and log["state"] == "done" and log["points"] >= 100,
+          f"the log: {log and log['name']}, {log and log['points']} points, state {log and log['state']}")
+    if not log:
+        return
+    row = wait_for(lambda: page.js(f'!!document.querySelector(\'#log-rows tr[data-name="{log["name"]}"]\')'), timeout=5)
+    check(row, "its row in the table")
+    csv = page.js(f"""fetch("/api/logs/{log['name']}.csv").then(r => r.text()).then(t => {{
+        const lines = t.trim().split("\\n"); return {{rows: lines.length - 1, cols: lines[0].split(",").length}}; }})""")
+    check(csv and csv["rows"] == log["points"] and csv["cols"] == 25,
+          f"CSV: {csv and csv['rows']} rows of {csv and csv['cols']} columns for {log['points']} points")
+    page.js(f'window.confirm = () => true; document.querySelector(\'#log-rows button[data-delete="{log["name"]}"]\').click()')
+    gone = wait_for(lambda: page.js(f'!document.querySelector(\'#log-rows tr[data-name="{log["name"]}"]\')') or None,
+                    timeout=6)
+    check(gone and not [l for l in api("/api/logs")["logs"] if l["name"] == log["name"]], "Delete: the log is gone")
+    if SHOTS:
+        page.call("Emulation.setDeviceMetricsOverride", width=1280, height=900, deviceScaleFactor=1, mobile=False)
+        page.js('document.getElementById("log-card").scrollIntoView()')
+        time.sleep(0.5)
+        r = page.js('(r => ({x: r.x, y: r.y + scrollY, w: r.width, h: r.height}))'
+                    '(document.getElementById("log-card").getBoundingClientRect())')
+        data = page.call("Page.captureScreenshot", format="png", captureBeyondViewport=True,
+                         clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"], "scale": 1})["data"]
+        os.makedirs(SHOTS, exist_ok=True)
+        with open(os.path.join(SHOTS, "logger.png"), "wb") as f:
+            f.write(base64.b64decode(data))
+        print(f"screenshot {os.path.join(SHOTS, 'logger.png')}")
+
+
 def control_tests(page):
     """the temperature control card: plot, mode buttons, setpoint, slider"""
     c0 = api("/api/control")["state"]
@@ -574,6 +636,7 @@ try:
     hex_tests(page)
     scope_tests(page)
     stream_tests(page)
+    logger_tests(page)
     control_tests(page)
     core_tests(page)
     for b in BUNDLES:

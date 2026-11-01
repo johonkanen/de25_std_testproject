@@ -283,3 +283,13 @@ button:focus-visible, input:focus-visible, .part:focus-visible { outline: 2px so
 .scope-tip .row b { font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
 .scope-tip .row span { color: var(--muted); }
 .scope-bar [hidden] { display: none; }
+
+/* the data logger's files */
+.log-table-wrap { overflow-x: auto; margin-top: 8px; }
+.log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.log-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.log-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.log-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.log-table a { color: var(--accent); margin-right: 8px; }
+.log-table button { font-size: 12px; padding: 2px 8px; }
+.log-table .empty { color: var(--muted); }

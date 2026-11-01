@@ -48,6 +48,8 @@
 --            in the table c_probe_table below.
 --   addr 288..297: the scope's DDR writer (scope_ddr_writer.vhd): deep
 --            captures into a 128 MB ring in the HPS DDR over F2SDRAM / F2H
+--   addr 304..308: the data logger's decimation (scope_decimator.vhd): a
+--            point of min / max / mean per n samples into the ring
 --   addr 0x8000..0xBFFF: the scope's last capture, read only (scope_block.vhd)
 --
 -- In blinker mode 0 (the reset default) LEDR[8:0] follow addr-5 bits 8..0

@@ -12,6 +12,9 @@
 --   full_when_stuck  the bus takes nothing: capture_is_full comes
 --   full_rate        a record every clock (50 MS/s) over F2H, which stalls
 --                    3/16 of the time: the FIFO never fills
+--   slow_flush       a few records and no flush: after g_flush_clocks the
+--                    whole beats are in memory, the lone record not; more
+--                    from there on (bursts no longer aligned) all in place
 ------------------------------------------------------------------------
 library ieee;
     use ieee.std_logic_1164.all;
@@ -213,7 +216,7 @@ begin
 
     dut : entity work.scope_ddr_writer
         generic map (g_base_address => regs, g_ring_records => ring, g_burst_beats => 16,
-                     g_fifo_beats => 64, g_max_outstanding => 4)
+                     g_fifo_beats => 64, g_max_outstanding => 4, g_flush_clocks => 2000)
         port map (
             clock => clock, reset => reset, bus_in => bus_in, bus_out => bus_out,
             capture_reset => capture_reset, capture_write => capture_write,
@@ -301,8 +304,12 @@ begin
             end loop;
         end procedure;
 
-        -- records first .. first+count-1, with gaps of 0..3 clocks, then the flush
-        procedure send(first : natural; count : natural; gaps : boolean := true) is
+        -- records first .. first+count-1, with gaps of 0..3 clocks, then the flush;
+        -- without it, wait for the timeout's: written then first+count (rounded
+        -- down to whole beats)
+        procedure send(first : natural; count : natural; gaps : boolean := true;
+                       flush : boolean := true) is
+            variable expect : natural;
         begin
             for r in first to first + count - 1 loop
                 wait until rising_edge(clock);
@@ -322,19 +329,23 @@ begin
                     wait until rising_edge(clock);
                 end loop;
             end loop;
-            capture_flush <= true;
+            capture_flush <= flush;
+            expect := count;
+            if not flush then
+                expect := (first + count) / 2 * 2;
+            end if;
             for i in 0 to 20000 loop
                 wait until rising_edge(clock);
-                exit when capture_written >= count;
+                exit when capture_written >= expect;
             end loop;
             capture_flush <= false;
-            if capture_written /= count then
+            if capture_written /= expect then
                 bus_read(regs + 2, word);
                 info("status " & to_hstring(word));
                 bus_read(regs + 6, word);
                 info("answers " & to_hstring(word));
             end if;
-            check_equal(to_integer(capture_written), count, "capture_written");
+            check_equal(to_integer(capture_written), expect, "capture_written");
         end procedure;
 
         procedure check_record(mem : word_array; position : natural; r : natural) is
@@ -426,6 +437,21 @@ begin
                 end loop;
                 bus_read(regs + 2, word);
                 info("FIFO high water " & integer'image(to_integer(unsigned(word(31 downto 16)))) & " beats");
+
+            elsif run("slow_flush") then
+                restart;
+                send(0, 7, flush => false);         -- 3 beats out, record 6 waits
+                for r in 0 to 5 loop
+                    check_record(mem_a, r, r);
+                end loop;
+                check_equal(mem_a(6 * 4), std_logic_vector'(x"DEADBEEF"), "the lone record not yet");
+                send(7, 45, flush => false);        -- beats 3..25: a short burst, then aligned ones
+                for r in 0 to 51 loop
+                    check_record(mem_a, r, r);
+                end loop;
+                bus_read(regs + 6, word);
+                info(integer'image(to_integer(unsigned(word))) & " bursts");
+                check_equal(errors_a, 0, "model errors");
 
             elsif run("full_when_stuck") then
                 restart;

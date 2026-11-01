@@ -138,6 +138,7 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/t
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/scope_capture.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/scope_fifo.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/scope_ddr_writer.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/scope_decimator.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/scope_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/register_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vhd

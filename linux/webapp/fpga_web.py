@@ -57,6 +57,16 @@ API:
                                     (rising|falling|either|pattern), level, unsigned,
                                     pattern, mask, sources [8], generator_hz
     POST /api/scope/stop            stop the capture
+    GET  /api/logs                  the data logger: status (running log, free space)
+                                    and every log's description (fpga_access.py runs it)
+    POST /api/logs/start {"settings": {"rate": 1000, "sources": [...], "generator_hz": F,
+                                    "label": "...", "max_seconds": S}}
+                                    a log: points/s of min/max/mean, until stopped,
+                                    the duration, or /data nearly full
+    POST /api/logs/stop             stop it
+    GET  /api/logs/<name>.i16|.json|.csv
+                                    a log's points (64 bytes each), description, or CSV
+    POST /api/logs/delete {"name": "log-..."}
     GET  /api/version               GUI release, previous, whether on test
     POST /api/update                localhost only (the RAUC post-install handler): a release
                                     .tar.gz; headers X-Sha256, X-Token; refused unless its
@@ -79,7 +89,9 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -97,7 +109,7 @@ from fpga_access import (BOARD_ID, BOARD_NAME, BOARD_VARIANT, FAN_MAX_RPM, fan_s
                          REG_ID, REG_KEY, REG_LEDS, REG_LEVELS0, REG_LEVELS1, REG_LEVELS2,
                          REG_LOOPBACK, REG_READ_COUNT, REG_SW, REG_UPTIME, REG_VARIANT,
                          FpgaClient, FpgaUnavailable, hwmon_root, ktach_to_rpm, rpm_to_ktach,
-                         run_dir)
+                         run_dir, list_logs, read_log_meta, POINT_BYTES)
 from temp_control import (HISTORY_S, ControlClient, ControlUnavailable,  # noqa: E402
                           find_hwmon, read_hwmon)
 
@@ -661,6 +673,106 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
             ctype = CONTENT_TYPES.get(os.path.splitext(path)[1], "application/octet-stream")
             self._send(200, body, ctype)
 
+        # ---- the data logger's files (fpga_access.py runs the logger) ----
+        def _log_status(self):
+            return FpgaClient(run, timeout=30.0).call(op="log_status")
+
+        def _logs_index(self):
+            try:
+                st = self._log_status()
+            except (ValueError, FpgaUnavailable) as e:
+                self._json({"error": str(e)}, 503)
+                return
+            self._json({"status": st, "logs": list_logs(st["dir"])})
+
+        def _log_file(self, rest):
+            m = re.fullmatch(r"(log-[A-Za-z0-9_-]+)\.(i16|json|csv)", rest)
+            if not m:
+                self.send_error(404)
+                return
+            name, ext = m.groups()
+            try:
+                directory = self._log_status()["dir"]
+                meta = read_log_meta(os.path.join(directory, name + ".json"))
+            except (ValueError, FpgaUnavailable, OSError) as e:
+                self._json({"error": str(e)}, 404)
+                return
+            path = os.path.join(directory, name + ".i16")
+            if ext == "json":
+                self._send(200, json.dumps(meta, indent=1).encode(), "application/json",
+                           [("Content-Disposition", f'attachment; filename="{name}.json"')])
+                return
+            # a running log grows: send whole points as far as they are there now
+            size = os.path.getsize(path) // POINT_BYTES * POINT_BYTES
+            with open(path, "rb") as f:
+                if ext == "i16":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Content-Disposition", f'attachment; filename="{name}.i16"')
+                    self.end_headers()
+                    left = size
+                    while left:
+                        chunk = f.read(min(left, 1 << 20))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+                else:
+                    self._log_csv(f, size, meta, name)
+
+        def _log_csv(self, f, size, meta, name):
+            """time, then each channel's min, max, mean: one row a point,
+            made as it goes out (no length: the connection closes after).
+            The time is the point's number over the rate: lost points leave
+            a gap."""
+            chans = meta["channels"]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}.csv"')
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            head = ["time_s"] + [f"CH{c + 1} {ch['name']} {k}" for k in ("min", "max", "mean")
+                                 for c, ch in enumerate(chans)]
+            self.wfile.write((",".join(head) + "\n").encode())
+            # unpacked as int16: the unsigned and digital channels made positive
+            fix = [i for i in range(24) if chans[i % 8]["format"] != "signed"]
+            rate = meta["rate"]
+            unpack = struct.Struct("<24h2H12x")
+            left = size
+            while left:
+                chunk = f.read(min(left, 21845 * POINT_BYTES))
+                if not chunk:
+                    break
+                left -= len(chunk)
+                lines = []
+                for row in unpack.iter_unpack(chunk):
+                    row = list(row)
+                    p = row.pop(24) << 16 | row.pop(24)
+                    for i in fix:
+                        row[i] &= 0xFFFF
+                    lines.append(f"{p / rate:.6f}," + ",".join(map(str, row)))
+                self.wfile.write(("\n".join(lines) + "\n").encode())
+
+        def _log_delete(self, req):
+            name = str(req.get("name", ""))
+            if not re.fullmatch(r"log-[A-Za-z0-9_-]+", name):
+                raise ValueError("no such log")
+            st = self._log_status()
+            if st.get("active") and (st.get("current") or {}).get("name") == name:
+                raise ValueError("the log is running: stop it first")
+            removed = 0
+            for ext in (".i16", ".json"):
+                try:
+                    os.remove(os.path.join(st["dir"], name + ext))
+                    removed += 1
+                except FileNotFoundError:
+                    pass
+            if not removed:
+                raise ValueError("no such log")
+            self._json({"deleted": name})
+
         def do_GET(self):
             url = urlparse(self.path)
             p = url.path
@@ -692,6 +804,10 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     self._json({"error": str(e)}, 404)
                 except FpgaUnavailable as e:
                     self._json({"error": str(e)}, 503)
+            elif p == "/api/logs":
+                self._logs_index()
+            elif p.startswith("/api/logs/"):
+                self._log_file(p[len("/api/logs/"):])
             elif p == "/api/read":
                 try:
                     reg = int(parse_qs(url.query)["reg"][0])
@@ -779,6 +895,14 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     req = self._json_body()
                     self._json(scope_fpga.call(op="scope_capture", settings=req.get("settings", {}),
                                                force=bool(req.get("force"))))
+                elif p == "/api/logs/start":
+                    req = self._json_body()
+                    self._json(FpgaClient(run, timeout=30.0).call(op="log_start",
+                                                                  settings=req.get("settings", {})))
+                elif p == "/api/logs/stop":
+                    self._json(FpgaClient(run, timeout=30.0).call(op="log_stop"))
+                elif p == "/api/logs/delete":
+                    self._log_delete(self._json_body())
                 elif p == "/api/scope/stop":
                     self._json(scope_fpga.call(op="scope_stop"))
                 elif p == "/api/fpga/reload":

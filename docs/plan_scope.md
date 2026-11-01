@@ -142,6 +142,65 @@ With 16-byte records gigabit Ethernet (about 118 MB/s of payload) allows about 7
   card's worker script failed to load about one time in two. Every POST's body is now taken
   off the connection.
 
+## Phase 4: done (2026-11-01), on the board
+
+Decided: logs go to the board's SD card and are downloaded from the GUI. A point holds each
+channel's minimum, maximum and mean. The target is 1-10 k points/s for hours.
+
+- **`fpga/scope_decimator.vhd`** sits between the scope's deep capture port and the DDR
+  writer (registers 304..308). Enabled, it turns every n samples (64 .. 2^26) into a point of
+  four records, 64 bytes:
+  - **Record 4p:** each channel's minimum.
+  - **Record 4p+1:** each channel's maximum.
+  - **Record 4p+2:** each channel's mean, exact: eight restoring dividers, 43 steps, rounded
+    to nearest with halves away from zero.
+  - **Record 4p+3:** the point's number, the points lost before it, and n.
+  - Digital channels (bit lanes) get AND, OR and the last sample.
+  - A point the writer has no room for is lost whole and counted. Its number says where.
+  - Disabled, records pass straight through, so the stream is unchanged.
+- **The DDR writer** now sends beats that have waited 21 ms (`g_flush_clocks`) as a shorter
+  burst. Before, records waited for a full 16-beat burst (512 bytes), and a continuous capture
+  never flushes. A slow log's last ~10 points sat in the FIFO and were lost on Stop. At 0.5
+  points/s the first one took 20 s to appear. A point is two whole beats, so whole points
+  always go out; this is why it has a 4th record.
+- **The logger** is a thread in `fpga_access.py` and runs with no page open:
+  - **Rate:** 0.1 to 100 000 points/s. The scope's input stays at 50 MS/s while n fits.
+  - **Output:** `/data/logs/<name>.i16`, fsynced every second, plus `<name>.json` (its
+    settings and layout).
+  - **Ends** on Stop, the set duration, or less than 64 MB left on the card.
+  - **After a restart:** a log cut short is marked `interrupted` and trimmed to whole points.
+  - **Exclusive:** the triggered scope, the stream and a log exclude each other.
+  - **Ring start:** a decimated ring is read from record 0. The scope reports its "first"
+    sample as record 1 (one sample goes in before it); for samples that is right, but for
+    points it shifted every point by a record. The simulator's ring starts at 0, so only the
+    board showed it.
+- **GUI:** a Data logger card with rate, duration, label, the free space and how long it
+  lasts, and a table of logs with CSV, raw and JSON downloads and Delete. In the CSV, the
+  time comes from the point's number, so a lost point leaves a gap.
+- **`/data` fills the card:**
+  - `linux/board/grow-data.py` runs once at boot, after `/data` is mounted.
+  - It grows p6 and the extended partition to the card's end. Only the size fields in the
+    MBR and the EBR change.
+  - It then calls BLKPG_RESIZE_PARTITION and an online `resize2fs`.
+  - On the board's 32 GB card, `/data` went from 487 MB to 26.8 GB, in under a second.
+  - At 64 bytes a point: 11 h at 10 k points/s, 113 h at 1 k points/s.
+- **Results** (`linux/tools/test_logger.py`, channel 0 on the generator's counter):
+  - **Check:** every point's minimum, maximum and mean against the counter's exact sequence,
+    plus continuity from point to point and the point numbers.
+  - **Results:**
+
+  | rate | n | run | points | lost | errors |
+  |---|---|---|---|---|---|
+  | 1 points/s | 50 M | 12 s | 11 | 0 | 0 |
+  | 1 k points/s | 50 000 | 30 s | 29 464 | 0 | 0 |
+  | 10 k points/s | 5 000 | 30 s | 293 840 | 0 | 0 |
+  | 100 k points/s | 500 | 30 s | 2 631 664 | 0 | 0 |
+  | 10 k points/s | 5 000 | **10 min** | **5 994 784** | 0 | 0 |
+
+  - **Downloads:** the .i16 at about 110 MB/s (384 MB in 3.4 s). The CSV is made on the
+    board as it goes out, about 46 k rows/s (7 MB/s): about 2 min for that 10-minute log.
+- **Not covered:** the logger records the test generator. Real inputs come with phase 5.
+
 ## Phases
 
 1. **Triggered scope in block RAM.** `fpga_scope` into the FPGA design on the register bus;
@@ -164,6 +223,5 @@ With 16-byte records gigabit Ethernet (about 118 MB/s of payload) allows about 7
 ## Open questions
 
 - Rates: is 8 × int16 at up to about 4 MS/s the target, or faster / wider samples?
-- Data logger: how long, at what rate, stored on the board or on the PC?
 - External ADC (from earlier): SCLK continuous or burst, the spare isolator channel, data
   lines and bits, framing.
