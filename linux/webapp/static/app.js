@@ -778,12 +778,444 @@ function plotSvg(o) {
   return out + "</svg>";
 }
 
+// ---------------------------------------------------------------- oscilloscope
+// The FPGA's scope (fpga/scope_block.vhd, fpga_scope's scope_capture): eight
+// channels, each any of the sources the FPGA names (its test generator, then
+// the probes). POST /api/scope/capture arms when the settings change and
+// waits 20 ms for the trigger; this asks again until a capture comes. One
+// strip per channel on one time axis (t = 0 at the trigger): each channel has
+// its own scale, so they are small multiples, not one shared y-axis. Digital
+// sources draw as stacked bit lanes.
+const SCOPE_DIVIDERS = [0, 1, 4, 9, 24, 49, 99, 249, 499, 999, 2499, 4999, 9999, 24999, 49999, 99999];
+const SCOPE_LENGTHS = [256, 512, 1024, 2048, 4096];
+const SCOPE_AUTO_MS = 250;       // auto mode: force a capture after this long without a trigger
+const SCOPE_CH = 8;
+const STRIP_H = 64, LANE_H = 16, STRIP_GAP = 8, AXIS_H = 22, LABEL_W = 116;
+const scope = {
+  info: null, running: false, single: false, force: false, armedAt: 0, busy: false,
+  cap: null, view: null, hover: null,
+};
+
+function fmtRate(hz) {
+  if (hz >= 1e6) return `${+(hz / 1e6).toFixed(3)} MS/s`;
+  if (hz >= 1e3) return `${+(hz / 1e3).toFixed(3)} kS/s`;
+  return `${+hz.toFixed(3)} S/s`;
+}
+function fmtTime(s) {
+  const a = Math.abs(s);
+  if (a === 0) return "0";
+  if (a < 1e-6) return `${+(s * 1e9).toFixed(0)} ns`;
+  if (a < 1e-3) return `${+(s * 1e6).toFixed(a < 1e-5 ? 2 : 1)} µs`;
+  if (a < 1) return `${+(s * 1e3).toFixed(a < 1e-2 ? 2 : 1)} ms`;
+  return `${+s.toFixed(3)} s`;
+}
+const chColor = (c) => getComputedStyle(document.documentElement).getPropertyValue(`--ch${c + 1}`).trim();
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+async function initScope() {
+  let info;
+  try { info = await api("/api/scope"); } catch (e) { return; }   // no scope in this core
+  scope.info = info;
+  $("scope-card").hidden = false;
+  $("scope-sub").textContent = `${info.channels} channels, ${info.depth} samples, ${fmtRate(info.clock_hz)} max` +
+    (info.sim ? " (simulated)" : "");
+  $("scope-rate").innerHTML = SCOPE_DIVIDERS.map((d) => `<option value="${d}">${fmtRate(info.clock_hz / (d + 1))}</option>`).join("");
+  $("scope-rate").value = "49";
+  $("scope-length").innerHTML = SCOPE_LENGTHS.filter((n) => n <= info.depth).map((n) => `<option>${n}</option>`).join("");
+  $("scope-length").value = String(Math.min(1024, info.depth));
+  const tch = $("scope-tch"), chs = $("scope-chs");
+  for (let c = 0; c < SCOPE_CH; c++) {
+    tch.add(new Option(`CH${c + 1}`, c));
+    const row = document.createElement("label");
+    row.className = "scope-ch";
+    const key = document.createElement("span");
+    key.className = "scope-key";
+    key.style.background = `var(--ch${c + 1})`;
+    const name = document.createElement("span");
+    name.textContent = `CH${c + 1}`;
+    const sel = document.createElement("select");
+    sel.id = `scope-src${c}`;
+    sel.add(new Option("off", "-1"));
+    info.sources.forEach((s, i) => sel.add(new Option(s.name + (s.format === "digital" ? " (bits)" : ""), i)));
+    sel.value = String(c < info.sources.length ? c : -1);
+    row.append(key, name, sel);
+    chs.append(row);
+  }
+  // a start that shows something: the test generator, the fan and the switches
+  const pick = (name) => info.sources.findIndex((s) => s.name === name);
+  [pick("sine"), pick("square"), pick("triangle"), pick("counter"), pick("fan rpm"), pick("switches"),
+   pick("LEDR0 level"), pick("fan i2c")].forEach((v, c) => { if (v >= 0) $(`scope-src${c}`).value = String(v); });
+  loadScopeSettings();
+  $("scope-run").onclick = () => scopeStart(false);
+  $("scope-single").onclick = () => scopeStart(true);
+  $("scope-stop").onclick = scopeStop;
+  $("scope-force").onclick = () => { scope.force = true; if (!scope.running) scopeStart(true); };
+  $("scope-csv").onclick = scopeCsv;
+  $("scope-edge").onchange = scopeEdgeShown;
+  $("scope-card").addEventListener("change", saveScopeSettings);
+  scopeEdgeShown();
+  const canvas = $("scope-canvas");
+  canvas.addEventListener("pointermove", (e) => scopeHover(e));
+  canvas.addEventListener("pointerleave", () => { scope.hover = null; $("scope-tip").hidden = true; drawScope(); });
+  window.addEventListener("resize", drawScope);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawScope);
+  drawScope();
+}
+
+function scopeEdgeShown() {
+  const pattern = $("scope-edge").value === "pattern";
+  $("scope-pattern-l").hidden = !pattern;
+  $("scope-level-l").hidden = pattern;
+}
+
+const SCOPE_KEYS = ["scope-rate", "scope-length", "scope-pre", "scope-mode", "scope-tch", "scope-edge",
+  "scope-level", "scope-pattern", "scope-mask", "scope-gen"];
+function saveScopeSettings() {
+  const o = {};
+  for (const k of SCOPE_KEYS) o[k] = $(k).value;
+  for (let c = 0; c < SCOPE_CH; c++) o[`scope-src${c}`] = $(`scope-src${c}`).value;
+  localStorage.setItem("de25-scope", JSON.stringify(o));
+}
+function loadScopeSettings() {
+  let o = null;
+  try { o = JSON.parse(localStorage.getItem("de25-scope")); } catch (e) { /* none */ }
+  if (!o) return;
+  for (const [k, v] of Object.entries(o)) {
+    const el = $(k);
+    if (el && [...(el.options || [])].some((op) => op.value === v) || el && !el.options) el.value = v;
+  }
+}
+
+function scopeSettings() {
+  const num = (id) => parseInt($(id).value, 0) || 0;
+  const sources = [];
+  for (let c = 0; c < SCOPE_CH; c++) sources.push(Math.max(0, +$(`scope-src${c}`).value));
+  const ch = +$("scope-tch").value;
+  const src = scope.info.sources[sources[ch]] || {};
+  return {
+    divider: +$("scope-rate").value,
+    length: +$("scope-length").value,
+    pre_percent: Math.max(0, Math.min(100, +$("scope-pre").value || 0)),
+    trigger: $("scope-mode").value !== "free",
+    channel: ch,
+    edge: $("scope-edge").value,
+    level: Math.round(+$("scope-level").value || 0),
+    unsigned: src.format === "unsigned" || src.format === "digital",
+    pattern: num("scope-pattern") & 0xffff,
+    mask: num("scope-mask") & 0xffff,
+    sources,
+    generator_hz: Math.max(0, +$("scope-gen").value || 0),
+  };
+}
+
+function setScopeStatus(kind, text) {
+  const el = $("scope-status");
+  el.className = "pill pill-" + kind;
+  el.textContent = text;
+}
+
+function scopeStart(single) {
+  scope.single = single;
+  $("scope-run").setAttribute("aria-pressed", String(!single));
+  $("scope-single").setAttribute("aria-pressed", String(single));
+  scope.armedAt = performance.now();
+  if (!scope.running) {
+    scope.running = true;
+    scopeLoop();
+  }
+}
+
+async function scopeStop() {
+  scope.running = false;
+  $("scope-run").setAttribute("aria-pressed", "false");
+  $("scope-single").setAttribute("aria-pressed", "false");
+  setScopeStatus("wait", "stopped");
+  try { await api("/api/scope/stop", {}); } catch (e) { /* the next run arms again */ }
+}
+
+async function scopeLoop() {
+  while (scope.running) {
+    const settings = scopeSettings();
+    let force = scope.force;
+    if (!force && $("scope-mode").value === "auto" && performance.now() - scope.armedAt > SCOPE_AUTO_MS) force = true;
+    scope.force = false;
+    let r;
+    try {
+      r = await api("/api/scope/capture", { settings, force });
+    } catch (e) {
+      setScopeStatus("bad", "error");
+      $("scope-msg").textContent = e.message;
+      await new Promise((ok) => setTimeout(ok, 1000));
+      continue;
+    }
+    if (!scope.running) break;       // stopped while this request was out: drop its answer
+    if (!r.done) {
+      setScopeStatus("wait", force ? "forcing" : "waiting for trigger");
+      continue;
+    }
+    scope.armedAt = performance.now();
+    scopeTake(r, settings);
+    setScopeStatus(r.forced ? "warn" : "ok", r.forced ? "forced" : settings.trigger ? "triggered" : "free running");
+    if (scope.single) {
+      scope.running = false;
+      $("scope-single").setAttribute("aria-pressed", "false");
+    } else {
+      await new Promise((ok) => setTimeout(ok, 30));
+    }
+  }
+}
+
+// the reply's int16 samples, 8 channels interleaved, into one array per channel
+function scopeTake(r, settings) {
+  const bytes = Uint8Array.from(atob(r.data), (ch) => ch.charCodeAt(0));
+  const all = new Int16Array(bytes.buffer);
+  const n = r.length, rate = scope.info.clock_hz / (settings.divider + 1);
+  const chans = [];
+  for (let c = 0; c < SCOPE_CH; c++) {
+    const on = +$(`scope-src${c}`).value >= 0;
+    const src = scope.info.sources[settings.sources[c]] || { name: "?", format: "signed" };
+    const v = new Float64Array(n);
+    for (let s = 0; s < n; s++) {
+      const x = all[s * SCOPE_CH + c];
+      v[s] = src.format === "signed" ? x : x & 0xffff;
+    }
+    chans.push({ on, src, v, lanes: src.format === "digital" ? scopeLanes(v) : 0 });
+  }
+  scope.cap = { n, pre: r.pre, rate, chans, settings, forced: r.forced, captures: r.captures };
+  $("scope-csv").disabled = false;
+  $("scope-msg").textContent = `${n} samples at ${fmtRate(rate)} = ${fmtTime(n / rate)}` +
+    (r.forced ? ", forced (no trigger)" : "") + `; capture ${r.captures}`;
+  drawScope();
+}
+
+// a digital source shows the lanes up to the highest bit that is ever set
+function scopeLanes(v) {
+  let any = 0;
+  for (const x of v) any |= x;
+  let lanes = 1;
+  while (any >> lanes) lanes++;
+  return lanes;
+}
+
+// the strips: [{c, y, h}] top to bottom, and the canvas height
+function scopeLayout() {
+  const out = [];
+  let y = 6;
+  const cap = scope.cap;
+  for (let c = 0; c < SCOPE_CH; c++) {
+    const on = cap ? cap.chans[c].on : +$(`scope-src${c}`).value >= 0;
+    if (!on) continue;
+    const lanes = cap ? cap.chans[c].lanes : 0;
+    const h = lanes ? Math.max(STRIP_H / 2, lanes * LANE_H) : STRIP_H;
+    out.push({ c, y, h });
+    y += h + STRIP_GAP;
+  }
+  return { strips: out, height: y + AXIS_H };
+}
+
+function drawScope() {
+  const canvas = $("scope-canvas");
+  if (!scope.info || !canvas) return;
+  const { strips, height } = scopeLayout();
+  const w = canvas.clientWidth || 600, dpr = window.devicePixelRatio || 1;
+  canvas.style.height = height + "px";
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(height * dpr);
+  const g = canvas.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, height);
+  const text = cssVar("--text"), muted = cssVar("--muted"), grid = cssVar("--grid"), line = cssVar("--line");
+  const x0 = LABEL_W, x1 = w - 8, cap = scope.cap;
+  scope.view = { x0, x1, strips };
+  g.font = "12px system-ui, sans-serif";
+  if (!cap) {
+    g.fillStyle = muted;
+    g.textAlign = "center";
+    g.fillText("Press Run or Single for a capture", (x0 + x1) / 2, height / 2);
+    return;
+  }
+  const n = cap.n, X = (s) => x0 + (s / Math.max(1, n - 1)) * (x1 - x0);
+  // time grid: about every 90 px, at round time steps, t = 0 at the trigger
+  const span = (n - 1) / cap.rate, raw = span / Math.max(1, (x1 - x0) / 90);
+  const p10 = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 5, 10].map((m) => m * p10).find((v) => v >= raw);
+  const tStart = -cap.pre / cap.rate, tEnd = tStart + span;
+  const bottom = height - AXIS_H;
+  g.strokeStyle = grid;
+  g.lineWidth = 1;
+  g.fillStyle = muted;
+  g.textAlign = "center";
+  for (let t = Math.ceil(tStart / step) * step; t <= tEnd + 1e-12; t += step) {
+    const x = X((t - tStart) * cap.rate);
+    g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, bottom); g.stroke();
+    g.fillText(fmtTime(Math.abs(t) < step / 1e6 ? 0 : t), x, bottom + 15);
+  }
+  // the trigger: t = 0
+  const xt = X(cap.pre);
+  g.strokeStyle = muted;
+  g.setLineDash([4, 3]);
+  g.beginPath(); g.moveTo(xt + 0.5, 0); g.lineTo(xt + 0.5, bottom); g.stroke();
+  g.setLineDash([]);
+  for (const st of strips) {
+    const ch = cap.chans[st.c], color = chColor(st.c);
+    g.strokeStyle = line;
+    g.beginPath(); g.moveTo(x0, st.y + st.h + 0.5); g.lineTo(x1, st.y + st.h + 0.5); g.stroke();
+    // label: the key, the channel and its source (text in text colours)
+    g.strokeStyle = color; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(4, st.y + 9); g.lineTo(18, st.y + 9); g.stroke();
+    g.lineWidth = 1;
+    g.fillStyle = text; g.textAlign = "left";
+    g.fillText(`CH${st.c + 1}`, 24, st.y + 13);
+    g.fillStyle = muted;
+    g.fillText(ch.src.name.slice(0, 14), 4, st.y + 28);
+    if (ch.lanes) drawLanes(g, ch, st, X, color, muted);
+    else drawTrace(g, ch, st, X, color, muted, cap, st.c);
+  }
+  if (scope.hover != null) {
+    const x = X(scope.hover);
+    g.strokeStyle = text; g.globalAlpha = 0.6;
+    g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, bottom); g.stroke();
+    g.globalAlpha = 1;
+  }
+}
+
+// an analog strip: auto range, min/max per pixel column when samples outnumber pixels
+function drawTrace(g, ch, st, X, color, muted, cap, c) {
+  let lo = Infinity, hi = -Infinity;
+  for (const x of ch.v) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  if (hi - lo < 2) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08, top = st.y + 3, bot = st.y + st.h - 3;
+  const Y = (v) => bot - ((v - (lo - pad)) / (hi - lo + 2 * pad)) * (bot - top);
+  ch.range = [lo, hi];
+  g.fillStyle = muted; g.textAlign = "right";
+  g.fillText(String(hi), LABEL_W - 6, top + 9);
+  g.fillText(String(lo), LABEL_W - 6, bot);
+  // the trigger level on the trigger channel
+  const s = cap.settings;
+  if (s.trigger && s.channel === c && s.edge !== "pattern" && s.level >= lo - pad && s.level <= hi + pad) {
+    const y = Y(s.level);
+    g.strokeStyle = color; g.globalAlpha = 0.5; g.setLineDash([2, 3]);
+    g.beginPath(); g.moveTo(LABEL_W, y); g.lineTo(X(cap.n - 1), y); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
+  }
+  g.strokeStyle = color; g.lineWidth = 2; g.lineJoin = "round";
+  g.beginPath();
+  const n = ch.v.length, cols = X(n - 1) - X(0);
+  if (n > cols * 2) {
+    const per = n / cols;
+    for (let px = 0; px < cols; px++) {
+      let a = Infinity, b = -Infinity;
+      for (let i = Math.floor(px * per); i < Math.min(n, Math.floor((px + 1) * per)); i++) {
+        const v = ch.v[i]; if (v < a) a = v; if (v > b) b = v;
+      }
+      const x = X(0) + px;
+      if (px === 0) g.moveTo(x, Y(a)); else g.lineTo(x, Y(a));
+      g.lineTo(x, Y(b));
+    }
+  } else {
+    for (let i = 0; i < n; i++) { if (i) g.lineTo(X(i), Y(ch.v[i])); else g.moveTo(X(i), Y(ch.v[i])); }
+  }
+  g.stroke();
+  g.lineWidth = 1;
+}
+
+// a digital strip: one lane per bit (b0 on top), high = up, the high
+// stretches filled lightly so a 1 reads at a glance
+function drawLanes(g, ch, st, X, color, muted) {
+  const lh = st.h / ch.lanes, x1 = X(ch.v.length - 1);
+  g.textAlign = "right";
+  for (let b = 0; b < ch.lanes; b++) {
+    const yHi = st.y + b * lh + 2, yLo = st.y + (b + 1) * lh - 2;
+    if (b) {
+      g.strokeStyle = cssVar("--grid"); g.lineWidth = 1;
+      g.beginPath(); g.moveTo(LABEL_W, st.y + b * lh + 0.5); g.lineTo(x1, st.y + b * lh + 0.5); g.stroke();
+    }
+    g.fillStyle = muted;
+    if (lh >= 10) g.fillText("b" + b, LABEL_W - 6, st.y + (b + 0.5) * lh + 4);
+    // the runs of 1s, filled
+    g.fillStyle = color; g.globalAlpha = 0.16;
+    let start = null;
+    for (let i = 0; i <= ch.v.length; i++) {
+      const bit = i < ch.v.length ? (ch.v[i] >> b) & 1 : 0;
+      if (bit && start === null) start = i;
+      if (!bit && start !== null) { g.fillRect(X(start), yHi, X(i - 1) - X(start) || 1, yLo - yHi); start = null; }
+    }
+    g.globalAlpha = 1;
+    g.strokeStyle = color; g.lineWidth = 1.5;
+    g.beginPath();
+    let prev = null;
+    for (let i = 0; i < ch.v.length; i++) {
+      const bit = (ch.v[i] >> b) & 1, y = bit ? yHi : yLo;
+      if (prev === null) g.moveTo(X(i), y);
+      else if (bit !== prev) { g.lineTo(X(i), prev ? yHi : yLo); g.lineTo(X(i), y); }
+      prev = bit;
+    }
+    g.lineTo(x1, prev ? yHi : yLo);
+    g.stroke();
+  }
+  g.lineWidth = 1;
+}
+
+// the crosshair snaps to the nearest sample; the tooltip lists every channel there
+function scopeHover(e) {
+  const cap = scope.cap, v = scope.view;
+  if (!cap || !v) return;
+  const rect = $("scope-canvas").getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  if (x < v.x0 || x > v.x1) { scope.hover = null; $("scope-tip").hidden = true; drawScope(); return; }
+  const s = Math.round(((x - v.x0) / (v.x1 - v.x0)) * (cap.n - 1));
+  scope.hover = s;
+  drawScope();
+  const tip = $("scope-tip");
+  tip.replaceChildren();
+  const t = document.createElement("div");
+  t.className = "t";
+  t.textContent = `t = ${fmtTime((s - cap.pre) / cap.rate)} (sample ${s})`;
+  tip.append(t);
+  for (const st of v.strips) {
+    const ch = cap.chans[st.c], val = ch.v[s];
+    const row = document.createElement("div");
+    row.className = "row";
+    const key = document.createElement("i");
+    key.className = "scope-key";
+    key.style.background = `var(--ch${st.c + 1})`;
+    const b = document.createElement("b");
+    b.textContent = ch.lanes ? "0b" + (val >>> 0).toString(2).padStart(ch.lanes, "0") : String(val);
+    const name = document.createElement("span");
+    name.textContent = `CH${st.c + 1} ${ch.src.name}`;
+    row.append(key, b, name);
+    tip.append(row);
+  }
+  tip.hidden = false;
+  const host = $("scope-plot").getBoundingClientRect();
+  const left = x + 14 + tip.offsetWidth > host.width ? x - 14 - tip.offsetWidth : x + 14;
+  tip.style.left = Math.max(0, left) + "px";
+  tip.style.top = Math.max(0, e.clientY - host.top - 20) + "px";
+}
+
+// the capture as a table: time, then one column per channel shown
+function scopeCsv() {
+  const cap = scope.cap;
+  if (!cap) return;
+  const shown = cap.chans.map((ch, c) => ({ ch, c })).filter((x) => x.ch.on);
+  const rows = ["time_s," + shown.map((x) => `CH${x.c + 1} ${x.ch.src.name}`.replace(/,/g, " ")).join(",")];
+  for (let s = 0; s < cap.n; s++) {
+    rows.push(((s - cap.pre) / cap.rate).toExponential(6) + "," + shown.map((x) => x.ch.v[s]).join(","));
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([rows.join("\n") + "\n"], { type: "text/csv" }));
+  a.download = `de25-scope-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 // ---------------------------------------------------------------- start
 buildControl();
 drawPlots();
 buildPanels();
 buildLedBar();
 loadBoard().then(connect);
+initScope();
 loadVersion().catch((e) => { $("release-msg").textContent = "Version unknown: " + e.message; });
 loadCoreInfo().catch((e) => { $("core-msg").textContent = "Core unknown: " + e.message; });
 loadRsuInfo().catch((e) => { $("rsu-image").textContent = "unknown: " + e.message; });

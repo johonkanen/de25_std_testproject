@@ -59,8 +59,11 @@ BUNDLES = "/tmp/d25s-bundles"                  # made once, kept across cases
 
 
 def bundle(parts):
+    """a test bundle, made once per core build and kept (named after the
+    build: a bundle of an older core must not be taken for this one's)"""
     os.makedirs(BUNDLES, exist_ok=True)
-    out = os.path.join(BUNDLES, "+".join(parts) + ".raucb")
+    build = json.load(open(CORE.replace(".rbf", ".json")))["build_id"]
+    out = os.path.join(BUNDLES, "+".join(parts) + f"-{build}.raucb")
     if not os.path.exists(out):
         make(set(parts), CORE, CORE.replace(".rbf", ".json"), KEYS, out)
     return out

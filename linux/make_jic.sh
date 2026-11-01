@@ -16,7 +16,10 @@
 #   0xA00000  u-boot.itb (UBOOT: for SPLs without RSU multiboot)
 #   0xC00000  CORE.FACTORY_IM, 0xD10000 CORE.P1: each image's FPGA core
 #             behind a 4 KB "core_size=0x..." header (U-Boot's preboot, via
-#             `rsu running_slot`, loads it when the card has none)
+#             `rsu running_slot`, loads it when the card has none). A core
+#             larger than a slot (0x110000 with the header; the scope's
+#             block RAM made it so, docs/plan_scope.md) is left out: its
+#             slots stay erased and U-Boot loads the core from the card only
 #   0x700000  P2, 0x800000 SSBL.P2, 0xE20000 CORE.P2: the second application
 #             image (docs/plan_rauc.md step 2, A/B with RAUC), empty: the
 #             first image update over the network fills it. AB=0 leaves
@@ -175,7 +178,13 @@ if (( RSU )); then
         </bitstream>"
     part() { printf '            <partition reserved="%s" fixed_s_addr="1" s_addr="%#010x" e_addr="%#010x" fixed_e_addr="1" id="%s" size="0"/>\n' "$4" "$2" "$3" "$1"; }
     (( uboot_size <= 0x100000 )) || { echo "u-boot.itb (${uboot_size} bytes) does not fit a 1 MB SSBL slot"; exit 1; }
-    (( 0x1000 + core_size <= 0x110000 )) || { echo "the core (${core_size} bytes) does not fit a CORE slot"; exit 1; }
+    CORE_IN_QSPI=1
+    if (( 0x1000 + core_size > 0x110000 )); then
+        CORE_IN_QSPI=0
+        echo ">> NOTE: the core (${core_size} bytes) does not fit a CORE slot (0x110000 with its header):"
+        echo "   no QSPI copy - CORE.FACTORY_IM and CORE.P1 stay erased, U-Boot loads the core"
+        echo "   from the SD card only (de25_std_<image>.core.rbf on its FAT partition)"
+    fi
     PARTS="$(part BOOT_INFO 0x000000 0x20FFFF 1
              part FACTORY_IMAGE 0x220000 0x31FFFF 0
              part SPT0 0x320000 0x327FFF 1
@@ -207,6 +216,9 @@ $(part P2 0x700000 0x7FFFFF 0
         <assignment page=\"0\" partition_id=\"CORE.P1\">
             <raw_file_id>Raw_File_2</raw_file_id>
         </assignment>"
+    if ! (( CORE_IN_QSPI )); then
+        CORE_RAW="" CORE_ASSIGN=""
+    fi
     IMAGE_ASSIGN="        <assignment page=\"0\" partition_id=\"FACTORY_IMAGE\">
             <bitstream_id>Factory</bitstream_id>
         </assignment>
@@ -221,7 +233,7 @@ $(part P2 0x700000 0x7FFFFF 0
         </assignment>"
     echo ">> RSU layout: factory image 0x220000, P1 0x400000, SPT/CPB 0x320000,"
     echo "   their U-Boots SSBL.FACTORY_IM 0x500000, SSBL.P1 0x600000,"
-    echo "   their cores CORE.FACTORY_IM ${QSPI_CORE_OFFS}, CORE.P1 $(printf '%#x' $(( QSPI_CORE_OFFS + 0x110000 )))"
+    echo "   their cores CORE.FACTORY_IM ${QSPI_CORE_OFFS}, CORE.P1 $(printf '%#x' $(( QSPI_CORE_OFFS + 0x110000 )))$( (( CORE_IN_QSPI )) || echo ' - left erased (core too big)')"
     (( AB )) && echo "   P2 0x700000, SSBL.P2 0x800000, CORE.P2 $(printf '%#x' $(( QSPI_CORE_OFFS + 0x220000 ))) - empty (AB=1)"
 else
     BITSTREAMS="        <bitstream id=\"Bitstream_1\">

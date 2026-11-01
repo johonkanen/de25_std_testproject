@@ -33,6 +33,29 @@ Zephyr's stack managed 1.7 MB/s). The HyperRAM, carrying writes and reads at onc
 
 With 16-byte records gigabit Ethernet (about 118 MB/s of payload) allows about 7 MS/s.
 
+## Phase 1: done (2026-10-31), on the board (2026-11-01)
+
+- FPGA: `fpga/source/fpga_scope` (submodule, at c88a58e) on the register bus in
+  `register_block.vhd` through `fpga/scope_block.vhd`: registers 256..278, 4096 samples
+  x 8 channels in block RAM on core_clock (up to 50 MS/s), the last capture read through
+  the window at register 0x8000.. (one 32-bit read per word over LWH2F, 6 clocks per read
+  in simulation; the LWH2F bridge's read timeout went from 7 to 15 clocks). Probes:
+  fan rpm and tach, switches, keys, LEDR (digital), LEDR0/LEDR9 brightness, the fan's
+  I2C lines and drives. Register 16 bit 2 says the core has the scope.
+  `fpga/sim/scope_block_tb.vhd`: the counter steps by one over a whole capture read
+  through the window, a probe lands in its channel, a read answers in time.
+- Linux: `fpga_access.py` ops `scope_info`, `scope_capture`, `scope_stop` (and a
+  simulated scope for `--sim`); `fpga_web.py` `GET /api/scope`, `POST
+  /api/scope/capture`, `POST /api/scope/stop`; the scope card in the GUI (one strip per
+  channel on one time axis, digital sources as bit lanes, crosshair readout, CSV).
+  `gui_test.py` takes a capture with it.
+- The core grew to 1.23 MB and no longer fits a QSPI core slot (1.11 MB): decided to
+  keep the layout and load such a core from the SD card only (`make_jic.sh`,
+  `install_rsu`, `docs/agilex5_network_update.md`; `linux/tools/rsu_install_test.py`).
+- On the board (2026-11-01): build 1793479599 in P2 through an image bundle (CORE.P2 erased,
+  not written; the core from the card), confirmed; `gui_test.py` against the board passes,
+  scope included (the sine triggers at 0, the counter steps by one over 1023 samples).
+
 ## Phases
 
 1. **Triggered scope in block RAM.** `fpga_scope` into the FPGA design on the register bus;

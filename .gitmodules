@@ -1,3 +1,6 @@
 [submodule "source/hVHDL_fpga_interconnect"]
 	path = fpga/source/hVHDL_fpga_interconnect
 	url = https://github.com/hVHDL/hVHDL_fpga_interconnect.git
+[submodule "fpga/source/fpga_scope"]
+	path = fpga/source/fpga_scope
+	url = https://github.com/johonkanen/fpga_scope

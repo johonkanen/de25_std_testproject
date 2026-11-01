@@ -44,6 +44,8 @@ VU = VUnit.from_argv(vhdl_standard="2019")
 lib = VU.add_library("de25_std_lib")
 
 S = FPGA / "source"
+SCOPE = S / "fpga_scope" / "source"
+MEM = S / "fpga_scope" / "submodules" / "hVHDL_memory_library" / "vhdl2008"
 for f in [
     S / "hVHDL_fpga_interconnect/fpga_interconnect_generic_pkg.vhd",
     S / "fpga_communication/fpga_interconnect_16bit_pkg.vhd",
@@ -61,6 +63,14 @@ for f in [
     S / "blinkers/blinker_slot.vhd",
     S / "led_blinkers.vhd",
     S / "hex_display.vhd",
+    # the oscilloscope (source/fpga_scope, a submodule with submodules)
+    MEM / "dp_ram_w_configurable_records.vhd",
+    MEM / "sdp_ram_w_configurable_records.vhd",
+    SCOPE / "scope_pkg.vhd",
+    SCOPE / "sine_table_pkg.vhd",
+    SCOPE / "test_signal_generator.vhd",
+    SCOPE / "scope_capture.vhd",
+    FPGA / "scope_block.vhd",
     FPGA / "register_block.vhd",
     FPGA / "h2f_user0_clk_heartbeat.vhd",
     FPGA / "hps/hps.vhd",
@@ -68,6 +78,7 @@ for f in [
     FPGA / "sim/led_blinkers_tb.vhd",
     FPGA / "sim/hex_display_tb.vhd",
     FPGA / "sim/max6650_fan_control_tb.vhd",
+    FPGA / "sim/scope_block_tb.vhd",
 ]:
     lib.add_source_files(f)
 

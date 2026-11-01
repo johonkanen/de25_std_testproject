@@ -245,6 +245,9 @@ supervisor on the host (busybox `sh`, `--sim`, a layout in `/tmp/d25s`).
 | `POST /api/hex` | `{"value": 0x123456}` digits, or `{"raw": [6 bytes, HEX0 first]}` (segments g..a, 1 = lit); and/or `{"blank": 0..63}` (bit n: HEXn); and/or `{"flip": true}` (readable from the other side of the board) |
 | `POST /api/fan` | `{"rpm": 1500..6000}` - loop in auto/manual: it becomes manual at this speed; loop off: register 9 directly |
 | `GET /api/read?reg=N`, `POST /api/write` | raw register access |
+| `GET /api/scope` | the oscilloscope (a core with it, register 16 bit 2): depth, channels, clock, the sources' names and formats (the FPGA's probe table) |
+| `POST /api/scope/capture` `{"settings": {...}, "force": false}` | one capture: arms when the settings changed, waits 20 ms for the trigger; `{"done": false}` if none yet (ask again), else `length`, `pre`, `forced` and `data` (base64, int16 little-endian, 8 channels interleaved) |
+| `POST /api/scope/stop` | stop the capture |
 | `GET /api/version` | release running, previous, on test, `board` |
 | `POST /api/bundle` | body: a signed RAUC bundle `.raucb`; headers `X-Sha256`, `X-Token`. Starts `rauc install` (202); a GUI release, a core and/or an image (then a reboot into it) |
 | `GET /api/bundle` | that install: `running`, `rc`, `log`, `reboot` |

@@ -16,7 +16,7 @@
 --
 -- One AXI4 transaction in flight at a time (no outstanding/pipelined
 -- requests) - fine for a register-poking test interface, not a
--- high-throughput DMA path. A read that gets no response within 7 clocks
+-- high-throughput DMA path. A read that gets no response within 15 clocks
 -- (nothing at that address, or the register file busy with the other
 -- master) returns 0 rather than hanging the AXI bus forever.
 ------------------------------------------------------------------------
@@ -139,7 +139,7 @@ begin
                 axi_s2m.rlast         <= '1';
                 read_active   <= '1';
                 request_data  <= '1';
-                read_watchdog <= 7;
+                read_watchdog <= 15;
             end if;
 
             if axi_s2m.rvalid = '1' and axi_m2s.rready = '1' then

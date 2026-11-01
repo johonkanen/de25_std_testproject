@@ -46,6 +46,17 @@ API:
                         and/or {"flip": true} (readable from the other side of the board)
     POST /api/fan       {"rpm": 1500..6000}  loop in auto/manual: becomes manual at this speed
     GET  /api/read?reg=N, POST /api/write {"reg": N, "value": V}   raw access
+    GET  /api/scope                 the oscilloscope: depth, channels, clock, its sources
+                                    (names and formats from the FPGA's probe table)
+    POST /api/scope/capture {"settings": {...}, "force": false}
+                                    one capture: arms when the settings changed, waits
+                                    20 ms for the trigger; {"done": false} if none yet (ask
+                                    again), else length, pre, forced and "data": base64 of
+                                    int16 little-endian, 8 channels interleaved. Settings:
+                                    divider, length, pre_percent, trigger, channel, edge
+                                    (rising|falling|either|pattern), level, unsigned,
+                                    pattern, mask, sources [8], generator_hz
+    POST /api/scope/stop            stop the capture
     GET  /api/version               GUI release, previous, whether on test
     POST /api/update                localhost only (the RAUC post-install handler): a release
                                     .tar.gz; headers X-Sha256, X-Token; refused unless its
@@ -605,6 +616,9 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
     static_dir = os.path.join(HERE, "static")
     bundles = Bundles(run)
     hex_lock = threading.Lock()     # /api/hex read-modify-writes register 22
+    # the scope's own connection to fpga_access: a capture (window reads, up
+    # to ~0.1 s) never waits behind the 20 Hz sampler, nor it behind a capture
+    scope_fpga = FpgaClient(run, timeout=10.0)
 
     def restart_soon():
         # the supervisor starts whatever "current" points at
@@ -670,6 +684,13 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     self._json({"error": str(e)}, 503)
             elif p == "/api/bundle":
                 self._json(bundles.status())
+            elif p == "/api/scope":
+                try:
+                    self._json(scope_fpga.call(op="scope_info"))
+                except ValueError as e:
+                    self._json({"error": str(e)}, 404)
+                except FpgaUnavailable as e:
+                    self._json({"error": str(e)}, 503)
             elif p == "/api/read":
                 try:
                     reg = int(parse_qs(url.query)["reg"][0])
@@ -734,6 +755,12 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
                     self._json({"reg": reg, "value": board.read(reg)})
                 elif p.startswith("/api/update"):
                     self._update(p)
+                elif p == "/api/scope/capture":
+                    req = self._json_body()
+                    self._json(scope_fpga.call(op="scope_capture", settings=req.get("settings", {}),
+                                               force=bool(req.get("force"))))
+                elif p == "/api/scope/stop":
+                    self._json(scope_fpga.call(op="scope_stop"))
                 elif p == "/api/fpga/reload":
                     self._reload_core()
                 elif p == "/api/bundle":
@@ -888,7 +915,7 @@ def make_app(board: Board, control: ControlLink, fpga: FpgaClient, releases: Rel
 
         def log_message(self, fmt, *args):
             polled = ("/api/events", "/api/board", "/api/version", "/api/control", "/api/fpga", "/api/rsu",
-                      "/api/bundle")
+                      "/api/bundle", "/api/scope")
             if not (self.command == "GET" and self.path.startswith(polled)):
                 print("%s - %s" % (self.address_string(), fmt % args), flush=True)
 

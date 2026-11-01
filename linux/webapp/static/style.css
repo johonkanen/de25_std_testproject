@@ -24,6 +24,10 @@
   --grid: #e8ebf0;
   --band: rgba(29, 138, 78, 0.10);
   --radius: 10px;
+  /* oscilloscope channels CH1..CH8: the dataviz reference palette's categorical
+     order, validated on --card in both modes (light: aqua, yellow, magenta < 3:1,
+     so every strip is labelled by name and value) */
+  --ch1: #2a78d6; --ch2: #eb6834; --ch3: #1baf7a; --ch4: #eda100; --ch5: #e87ba4; --ch6: #008300; --ch7: #6250d6; --ch8: #e34948;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -32,6 +36,7 @@
     --line: #2b3240; --accent: #5b8ff0; --accent-text: #0d1220;
     --ok: #3ccf7f; --warn: #e3a53a; --bad: #ef6b5b;
     --series-temp: #6b9bf2; --series-duty: #3fbfb0; --grid: #252b37; --band: rgba(60, 207, 127, 0.12);
+    --ch1: #3987e5; --ch2: #d95926; --ch3: #199e70; --ch4: #c98500; --ch5: #d55181; --ch6: #008300; --ch7: #9085e9; --ch8: #e66767;
     color-scheme: dark;
   }
 }
@@ -40,6 +45,7 @@
   --line: #2b3240; --accent: #5b8ff0; --accent-text: #0d1220;
   --ok: #3ccf7f; --warn: #e3a53a; --bad: #ef6b5b;
   --series-temp: #6b9bf2; --series-duty: #3fbfb0; --grid: #252b37; --band: rgba(60, 207, 127, 0.12);
+  --ch1: #3987e5; --ch2: #d95926; --ch3: #199e70; --ch4: #c98500; --ch5: #d55181; --ch6: #008300; --ch7: #9085e9; --ch8: #e66767;
   color-scheme: dark;
 }
 
@@ -243,3 +249,37 @@ button:focus-visible, input:focus-visible, .part:focus-visible { outline: 2px so
 .board .lcd-screen { fill: #9eae8c; }
 .board .jack { stroke: #222; }
 #fan-ok.bad { color: var(--bad); font-weight: 600; }
+
+/* ---- oscilloscope (scope card) ---- */
+.scope { margin-top: 16px; }
+.scope-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 8px 0; }
+.scope-bar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+.scope-bar select, .scope-bar input, .scope-ch select {
+  font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--card); color: var(--text);
+}
+.scope-bar input[type=number] { width: 84px; }
+.scope-run { display: inline-flex; gap: 6px; }
+.scope-run button {
+  font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: transparent; color: var(--text);
+}
+.scope-run button:hover { border-color: var(--accent); }
+.scope-run button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.scope-chs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 12px; margin: 6px 0 10px; }
+@media (max-width: 700px) { .scope-chs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.scope-ch { display: flex; gap: 6px; align-items: center; font-size: 13px; min-width: 0; }
+.scope-ch select { min-width: 0; flex: 1; }
+.scope-key { width: 14px; height: 2px; border-radius: 1px; flex: none; }
+.scope-plot { position: relative; }
+.scope-plot canvas { display: block; width: 100%; touch-action: pan-y; }
+.scope-tip {
+  position: absolute; pointer-events: none; z-index: 2; min-width: 150px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 8px; font-size: 12px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+}
+.scope-tip .t { color: var(--muted); margin-bottom: 4px; }
+.scope-tip .row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.scope-tip .row b { font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
+.scope-tip .row span { color: var(--muted); }
+.scope-bar [hidden] { display: none; }

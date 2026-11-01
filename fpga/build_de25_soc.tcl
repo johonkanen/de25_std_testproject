@@ -129,6 +129,14 @@ set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_sp
 set_global_assignment -name VHDL_FILE $this_file_path/source/blinkers/blinker_slot.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/led_blinkers.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/source/hex_display.vhd
+# the oscilloscope (source/fpga_scope: a submodule with submodules)
+set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/submodules/hVHDL_memory_library/vhdl2008/dp_ram_w_configurable_records.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/submodules/hVHDL_memory_library/vhdl2008/sdp_ram_w_configurable_records.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/scope_pkg.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/sine_table_pkg.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/test_signal_generator.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/source/fpga_scope/source/scope_capture.vhd
+set_global_assignment -name VHDL_FILE $this_file_path/scope_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/register_block.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/h2f_user0_clk_heartbeat.vhd
 set_global_assignment -name VHDL_FILE $this_file_path/hps/hps.vhd

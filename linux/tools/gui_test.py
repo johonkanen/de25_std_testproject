@@ -2,7 +2,8 @@
 """gui_test.py [url] [--shots DIR] - drive the DE25-Standard web GUI in a real
 (headless) Chromium over the DevTools protocol (ported from the DE25-Nano's):
 open the page, click each blinker mode and check the page (and the register
-file behind it) follow, toggle an LED in software mode, set the 7-segment
+file behind it) follow, take a capture with the oscilloscope card (a sine
+triggered at t = 0, the counter, the switches as bit lanes), toggle an LED in software mode, set the 7-segment
 displays from the card and by clicking a segment, flip them, check the
 temperature control plot renders and its mode buttons, setpoint and the fan
 slider (rpm) reach the controller (the loop's and the displays' settings
@@ -155,6 +156,77 @@ def wait_for(fn, timeout=4.0):
         if v or time.time() - t0 > timeout:
             return v
         time.sleep(0.3)
+
+
+def scope_tests(page):
+    """the oscilloscope card (a core with the scope, or the simulated
+    board's): a single capture of the test generator, its strips, a rising
+    trigger on the sine at t = 0, the crosshair's readout, Run and Stop"""
+    info = api("/api/scope")
+    if not info or not info.get("ok"):
+        print(f"SKIP  oscilloscope: none in this core ({(info or {}).get('error')})")
+        return
+    if not check(wait_for(lambda: page.js('!document.getElementById("scope-card").hidden')),
+                 f"scope card shown: {len(info['sources'])} sources, depth {info['depth']}"):
+        return
+    names = [s["name"] for s in info["sources"]]
+    # sine on CH1 (the trigger), the counter on CH2, the switches (bits) on CH3, the rest off
+    setup = {0: "sine", 1: "counter", 2: "switches"}
+    for c in range(8):
+        v = names.index(setup[c]) if c in setup else -1
+        page.js(f'(e => {{ e.value = "{v}"; e.dispatchEvent(new Event("change", {{bubbles: true}})); }})'
+                f'(document.getElementById("scope-src{c}"))')
+    page.js("""(() => { const set = (id, v) => { const e = document.getElementById(id); e.value = v;
+        e.dispatchEvent(new Event("change", {bubbles: true})); };
+        set("scope-rate", "49"); set("scope-length", "1024"); set("scope-pre", "50");
+        set("scope-mode", "normal"); set("scope-tch", "0"); set("scope-edge", "rising");
+        set("scope-level", "0"); set("scope-gen", "20000"); })()""")
+    page.js('document.getElementById("scope-single").click()')
+    status = wait_for(lambda: (lambda t: t if t in ("triggered", "forced") else None)(
+        page.js('document.getElementById("scope-status").textContent')), timeout=6)
+    check(status == "triggered", f"Single: status {status!r}")
+    cap = page.js("""(() => { const c = scope.cap; if (!c) return null;
+        const on = c.chans.filter(x => x.on);
+        const sine = c.chans[0].v, cnt = c.chans[1].v;
+        let steps = 0; for (let i = 1; i < cnt.length; i++) steps += ((cnt[i] - cnt[i-1]) & 0xffff) === 1;
+        return {n: c.n, pre: c.pre, shown: on.length, lanes: c.chans[2].lanes,
+                before: sine[c.pre - 1], at: sine[c.pre], steps,
+                h: document.getElementById("scope-canvas").getBoundingClientRect().height}; })()""")
+    check(cap and cap["n"] == 1024 and cap["shown"] == 3 and cap["h"] > 150,
+          f"capture drawn: {cap and cap['n']} samples, {cap and cap['shown']} strips, "
+          f"canvas {cap and round(cap['h'])} px high")
+    check(cap and cap["before"] < 0 <= cap["at"],
+          f"rising trigger on the sine at t = 0: {cap and cap['before']} -> {cap and cap['at']}")
+    check(cap and cap["steps"] == cap["n"] - 1,
+          f"counter steps by one: {cap and cap['steps']} of {cap and cap['n'] - 1}")
+    check(cap and cap["lanes"] >= 1, f"switches drawn as {cap and cap['lanes']} bit lanes")
+    # the crosshair: one readout row per strip shown
+    rows = page.js("""(() => { const c = document.getElementById("scope-canvas"), r = c.getBoundingClientRect();
+        c.dispatchEvent(new PointerEvent("pointermove", {clientX: r.left + r.width * 0.6,
+                                                         clientY: r.top + 30, bubbles: true}));
+        const tip = document.getElementById("scope-tip");
+        return tip.hidden ? 0 : tip.querySelectorAll(".row").length; })()""")
+    check(rows == 3, f"crosshair readout: {rows} rows")
+    if SHOTS:
+        page.call("Emulation.setDeviceMetricsOverride", width=1280, height=900, deviceScaleFactor=1, mobile=False)
+        page.js('document.getElementById("scope-card").scrollIntoView()')
+        time.sleep(0.5)
+        r = page.js('(r => ({x: r.x, y: r.y + scrollY, w: r.width, h: r.height}))'
+                    '(document.getElementById("scope-card").getBoundingClientRect())')
+        data = page.call("Page.captureScreenshot", format="png", captureBeyondViewport=True,
+                         clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"], "scale": 1})["data"]
+        os.makedirs(SHOTS, exist_ok=True)
+        with open(os.path.join(SHOTS, "scope.png"), "wb") as f:
+            f.write(base64.b64decode(data))
+        print(f"screenshot {os.path.join(SHOTS, 'scope.png')}")
+    # Run: captures keep coming; Stop: they stop
+    before = page.js("scope.cap.captures")
+    page.js('document.getElementById("scope-run").click()')
+    more = wait_for(lambda: page.js("scope.cap.captures") != before, timeout=6)
+    page.js('document.getElementById("scope-stop").click()')
+    time.sleep(0.5)
+    stopped = page.js('document.getElementById("scope-status").textContent')
+    check(more and stopped == "stopped", f"Run: new captures {bool(more)}; Stop: status {stopped!r}")
 
 
 def control_tests(page):
@@ -440,6 +512,7 @@ try:
     print(f"{'PASS' if ok else 'FAIL'}  click LEDR2 in software mode: register 5 {before:#05x} -> {after:#05x}")
 
     hex_tests(page)
+    scope_tests(page)
     control_tests(page)
     core_tests(page)
     for b in BUNDLES:

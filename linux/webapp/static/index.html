@@ -59,6 +59,46 @@
         <p class="sub">PI on the hottest sensor, once a second; the fan speed stays within 1500..6000 rpm (the MAX6650 holds the speed it is given). The fan can only cool: at minimum fan and still below the setpoint, or at full fan and still above it, the loop is <b>saturated</b> and says so. If the controller stops, the fan keeps its speed and is raised to 4000 rpm after 10 s - the fan chip has no over-temperature fail-safe of its own.</p>
       </details>
     </section>
+
+    <section class="card scope" id="scope-card" aria-labelledby="scope-title" hidden>
+      <div class="ctl-head">
+        <h2 id="scope-title">Oscilloscope <span class="sub" id="scope-sub">-</span></h2>
+        <span id="scope-status" class="pill pill-wait">stopped</span>
+      </div>
+      <div class="scope-bar">
+        <span class="scope-run">
+          <button type="button" id="scope-run" aria-pressed="false" title="Capture again and again">Run</button>
+          <button type="button" id="scope-single" aria-pressed="false" title="One capture, then stop">Single</button>
+          <button type="button" id="scope-stop" title="Stop capturing">Stop</button>
+          <button type="button" id="scope-force" title="Trigger now">Force</button>
+        </span>
+        <label>Rate <select id="scope-rate"></select></label>
+        <label>Length <select id="scope-length"></select></label>
+        <label>Pre-trigger <input id="scope-pre" type="number" min="0" max="100" step="5" value="50"> %</label>
+      </div>
+      <div class="scope-bar">
+        <label>Trigger <select id="scope-mode">
+          <option value="auto">auto</option><option value="normal">normal</option><option value="free">free running</option>
+        </select></label>
+        <label>on <select id="scope-tch"></select></label>
+        <label><select id="scope-edge">
+          <option value="rising">rising</option><option value="falling">falling</option>
+          <option value="either">either edge</option><option value="pattern">pattern</option>
+        </select></label>
+        <label id="scope-level-l">level <input id="scope-level" type="number" step="1" value="0"></label>
+        <label id="scope-pattern-l" hidden>pattern <input id="scope-pattern" type="text" value="0x0" size="7"> mask <input id="scope-mask" type="text" value="0x1" size="7"></label>
+        <label>Generator <input id="scope-gen" type="number" min="0" step="any" value="1000"> Hz</label>
+      </div>
+      <div class="scope-chs" id="scope-chs" aria-label="Channel sources"></div>
+      <div class="scope-plot" id="scope-plot">
+        <canvas id="scope-canvas" role="img" aria-label="Oscilloscope capture, one strip per channel"></canvas>
+        <div id="scope-tip" class="scope-tip" hidden></div>
+      </div>
+      <div class="scope-bar">
+        <button type="button" id="scope-csv" class="secondary" disabled>Download CSV</button>
+        <span class="sub" id="scope-msg" role="status"></span>
+      </div>
+    </section>
   </section>
 
   <aside class="panels">

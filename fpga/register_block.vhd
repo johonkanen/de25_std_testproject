@@ -26,7 +26,8 @@
 --            1 off, 2 counter, 3 scanner, 4 breathing, 5 sparkle
 --   addr 14: LEDR 3..0 brightness, a byte each (RO)
 --   addr 15: LEDR 7..4 brightness (RO)
---   addr 16: features - bit 0 hardware blinkers, bit 1 HEX displays (RO)
+--   addr 16: features - bit 0 hardware blinkers, bit 1 HEX displays,
+--            bit 2 oscilloscope (RO)
 --   addr 17: blinker module id, four ASCII chars, 0 in modes 0/1 (RO)
 --   addr 18: board variant 0x53544400 ("STD\0"; the DE25-Nano reads 0)  (RO)
 --   addr 19: build id, Unix time of the build (build_id_pkg.vhd)  (RO)
@@ -41,6 +42,11 @@
 --   addr 27: bits 1:0 the parity of everything the F2SDRAM / F2H buses
 --            return (bridge_parity; a placeholder that keeps the two
 --            buses connected until the scope's DDR writer uses them)  (RO)
+--   addr 256..278: the oscilloscope (scope_block.vhd; the map is the header
+--            of source/fpga_scope/source/scope_capture.vhd), 4096 samples
+--            of 8 channels, on core_clock: up to 50 MS/s. Its probes are
+--            in the table c_probe_table below.
+--   addr 0x8000..0xBFFF: the scope's last capture, read only (scope_block.vhd)
 --
 -- In blinker mode 0 (the reset default) LEDR[8:0] follow addr-5 bits 8..0
 -- and LEDR[9] is a ~1 Hz heartbeat so the board shows life without a
@@ -66,6 +72,7 @@ library ieee;
     use ieee.std_logic_1164.all;
     use ieee.numeric_std.all;
     use work.hps_axi_pkg.all;
+    use work.scope_pkg.all;
 
 entity register_block is
     generic (
@@ -166,7 +173,23 @@ architecture rtl of register_block is
     signal blinker_levels        : std_logic_vector(79 downto 0);
     signal blinker_id            : std_logic_vector(31 downto 0);
     -- register 16: bit 0 hardware blinkers, bit 1 HEX displays
-    constant c_features : std_logic_vector(31 downto 0) := x"00000003";
+    constant c_features : std_logic_vector(31 downto 0) := x"00000007";
+
+    -- the oscilloscope's probes (scope_block.vhd): sources 8.. after its own
+    -- test generator's 0..7. Names are what the web GUI shows.
+    constant c_probe_table : probe_table_array(0 to 7) := (
+        0 => probe_entry("fan rpm",     unsigned_probe),
+        1 => probe_entry("fan tach",    unsigned_probe),
+        2 => probe_entry("switches",    digital_probe),    -- SW9..0, lane n = SWn
+        3 => probe_entry("keys",        digital_probe),    -- KEY3..0 pressed, lane 4 CPU_RESET
+        4 => probe_entry("LEDR",        digital_probe),    -- LEDR9..0
+        5 => probe_entry("LEDR0 level", unsigned_probe),
+        6 => probe_entry("LEDR9 level", unsigned_probe),
+        7 => probe_entry("fan i2c",     digital_probe));   -- 0 SCL, 1 SDA (the lines),
+                                                           -- 2 SCL, 3 SDA driven low
+    signal probes        : scope_sample_array(0 to 7) := (others => (others => '0'));
+    signal scope_bus_out : fpga_interconnect_record := init_fpga_interconnect;
+    signal i2c_meta, i2c_sync : std_logic_vector(1 downto 0) := "11";
 
     -- HEX displays (source/hex_display.vhd)
     signal hex_value_register   : std_logic_vector(31 downto 0) := (others => '0');
@@ -231,6 +254,7 @@ begin
         if rising_edge(core_clock) then
             sw_meta  <= SW;   sw_sync  <= sw_meta;
             key_meta <= KEY;  key_sync <= key_meta;
+            i2c_meta <= FPGA_I2C_SDA & FPGA_I2C_SCL;  i2c_sync <= i2c_meta;
         end if;
     end process input_synchroniser;
 
@@ -244,6 +268,36 @@ begin
             end if;
         end if;
     end process heartbeat_gen;
+
+------------------------------------------------------------------------
+    u_scope : entity work.scope_block
+    generic map (
+        g_base_address => 256
+        ,g_window      => 16#8000#
+        ,g_depth       => 4096
+        ,g_probes      => c_probe_table'length
+        ,g_probe_table => c_probe_table
+    )
+    port map (
+        clock    => core_clock
+        ,bus_in  => bus_from_axi
+        ,bus_out => scope_bus_out
+        ,probes  => probes
+    );
+
+    scope_probes : process (core_clock) is
+    begin
+        if rising_edge(core_clock) then
+            probes(0) <= to_probe(fan_rpm);
+            probes(1) <= to_probe(fan_tach0);
+            probes(2) <= to_digital(sw_sync);
+            probes(3) <= to_digital(not CPU_RESET_n & not key_sync);
+            probes(4) <= to_digital(LEDR);
+            probes(5) <= to_probe(blinker_levels(7 downto 0));
+            probes(6) <= to_probe(blinker_levels(79 downto 72));
+            probes(7) <= to_digital(i2c_sda_low & i2c_scl_low & i2c_sync);
+        end if;
+    end process scope_probes;
 
 ------------------------------------------------------------------------
     u_led_blinkers : entity work.led_blinkers
@@ -326,7 +380,7 @@ begin
 
             uptime_counter <= uptime_counter + 1;
 
-            bus_to_axi <= bus_from_top_axi;
+            bus_to_axi <= bus_from_top_axi and scope_bus_out;
 
             -- the button: the user registers back to their reset values
             -- (not bus_to_axi: a read in flight still gets its answer)

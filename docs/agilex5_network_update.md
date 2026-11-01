@@ -152,8 +152,15 @@ Write the `.pfg` with **fixed addresses throughout**. With `"auto"`, quartus_pfg
   `page="1"`. The `u-boot.itb` and the header + core are raw files
   (`bitswap="1"`), each assigned to both of its partitions. The P2
   partitions get no assignment.
-- Check the sizes in the script: `u-boot.itb` ≤ 1 MB, header + core ≤
-  0x110000.
+- Check the sizes in the script: `u-boot.itb` ≤ 1 MB. A header + core
+  larger than 0x110000 (the oscilloscope's block RAM made the core 1.23 MB,
+  2026-10-31) gets no QSPI copy: `make_jic.sh` leaves the CORE slots
+  erased, and an image update (`fpga_access.py` `install_rsu`) erases
+  `CORE.<slot>` and writes the core to the card and `/lib/firmware` only.
+  U-Boot then loads the core from the card alone; an erased slot fails its
+  header check, so no older core ever loads with a newer image. The cost:
+  a card without the core leaves the fabric unconfigured (the fabric guard
+  in `fpga_access.py` keeps Linux off the bridge).
 - The flash loader is the **full** device string
   (`A5ED013BB32AE4SCS`). An abbreviated one resolved to a different JTAG
   IDCODE on the Nano.

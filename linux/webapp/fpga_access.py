@@ -101,6 +101,7 @@ temp_control.py and fpga_web.py read exactly like /sys/class/hwmon.
 Stdlib only.
 """
 import argparse
+import base64
 import hashlib
 import json
 import math
@@ -120,7 +121,9 @@ import time
 
 LWH2F_BASE = 0x20000000
 REG_STRIDE = 0x10          # each register is 16 bytes apart: LWH2F_BASE + (n << 4)
-MAP_SIZE = 0x1000          # 4 KB window: registers 0..255
+# registers 0..255, the scope's at 256.., and its capture window up to
+# SCOPE_WINDOW + 4 * depth (fpga/scope_block.vhd)
+MAP_SIZE = 0xC0000
 PAGE_SIZE = mmap.PAGESIZE
 
 # register numbers - fpga/register_block.vhd's header has the full map
@@ -137,6 +140,24 @@ BOARD_VARIANT = 0x53544400         # "STD\0"; the DE25-Nano reads 0
 BOARD_NAME = "de25-std"            # in a core manifest
 FEATURE_HW_BLINKERS = 1 << 0
 FEATURE_HEX = 1 << 1
+FEATURE_SCOPE = 1 << 2
+
+# the oscilloscope (fpga/scope_block.vhd; the register map is the header of
+# fpga/source/fpga_scope/source/scope_capture.vhd)
+SCOPE_BASE = 256
+SCOPE_WINDOW = 0x8000
+SCOPE_CLOCK_HZ = 50_000_000            # core_clock
+SCOPE_CHANNELS = 8
+SCOPE_GENERATOR_SOURCES = 8
+S_COMMAND, S_DIVIDER, S_TRIGGER, S_LEVEL, S_PRE, S_LENGTH, S_SOURCES_LO = 0, 1, 2, 3, 4, 5, 6
+S_PHASE_STEP, S_INFORMATION, S_MODE, S_SOURCES_HI = 7, 8, 10, 14
+S_PATTERN, S_PROBE_INDEX, S_PROBE_NAME, S_PROBE_FORMAT = 15, 16, 17, 21
+S_ARM, S_FORCE, S_STOP = 1, 2, 4
+S_STATE_DONE, S_STATUS_FORCED = 4, 1 << 8
+S_TRIGGER_ENABLE, S_TRIGGER_UNSIGNED = 1 << 8, 1 << 9
+SCOPE_EDGES = {"rising": 0, "falling": 1, "either": 2, "pattern": 3}
+SCOPE_FORMATS = ("signed", "unsigned", "digital")
+SCOPE_WAIT_S = 0.02                    # one request waits this long for a trigger
 LEDS = 10                          # LEDR[9:0]
 KEY_RESET_BIT = 4                  # register 7: CPU_RESET_n pressed
 WRITABLE = {REG_LOOPBACK, REG_LEDS, REG_FAN_KTACH, REG_BLINKER,
@@ -296,7 +317,7 @@ class SimBridge:
 
     def __init__(self, state_file=None):
         self._regs = {REG_ID: BOARD_ID, REG_GIT: 0x5151D00D, REG_VARIANT: BOARD_VARIANT,
-                      REG_FEATURES: FEATURE_HW_BLINKERS | FEATURE_HEX,
+                      REG_FEATURES: FEATURE_HW_BLINKERS | FEATURE_HEX | FEATURE_SCOPE,
                       REG_FAN_STATUS: 0x1F000529, REG_BUILD_ID: 0, **RESET_VALUES}
         self._state_file = state_file
         if state_file:
@@ -868,6 +889,242 @@ def check_bundle(path):
 # --------------------------------------------------------------------------
 # the server
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# the oscilloscope: real (registers + capture window) or simulated
+# --------------------------------------------------------------------------
+def scope_settings(req):
+    """the settings of a capture request, checked, with defaults"""
+    sources = [int(x) for x in req.get("sources", range(SCOPE_CHANNELS))][:SCOPE_CHANNELS]
+    sources += list(range(len(sources), SCOPE_CHANNELS))
+    edge = str(req.get("edge", "rising"))
+    if edge not in SCOPE_EDGES:
+        raise ValueError(f"edge {edge!r}: one of {', '.join(SCOPE_EDGES)}")
+    return {
+        "divider": max(0, int(req.get("divider", 0))),
+        "length": int(req.get("length", 4096)),
+        "pre_percent": min(100, max(0, int(req.get("pre_percent", 50)))),
+        "trigger": bool(req.get("trigger", True)),
+        "channel": int(req.get("channel", 0)) % SCOPE_CHANNELS,
+        "edge": edge,
+        "level": int(req.get("level", 0)),
+        "unsigned": bool(req.get("unsigned", False)),
+        "pattern": int(req.get("pattern", 0)) & 0xFFFF,
+        "mask": int(req.get("mask", 0)) & 0xFFFF,
+        "sources": sources,
+        "generator_hz": float(req.get("generator_hz", 1000.0)),
+    }
+
+
+class ScopeHw:
+    """scope_capture through the register file. Arms when the settings change
+    (or after a capture), then each capture() waits SCOPE_WAIT_S for it to be
+    done: the caller comes back if not (as the Ti60's capture_hw.c does)."""
+
+    def __init__(self, bridge):
+        self.b = bridge
+        self.armed = None                    # the settings armed with, None: not armed
+        self._info = None
+
+    def r(self, n):
+        return self.b.read(SCOPE_BASE + n)
+
+    def w(self, n, v):
+        self.b.write(SCOPE_BASE + n, v)
+
+    def info(self):
+        if self._info is None:
+            information = self.r(S_INFORMATION)
+            depth, channels, count = information & 0xFFFF, (information >> 16) & 0xFF, information >> 24
+            sources = []
+            for s in range(count):
+                self.w(S_PROBE_INDEX, s)
+                time.sleep(0.0001)           # its words fetched from the names' RAM
+                words = [self.r(S_PROBE_NAME + i) for i in range(4)]
+                name = b"".join(struct.pack(">I", x) for x in words).split(b"\0")[0]
+                fmt = self.r(S_PROBE_FORMAT) & 0xFF
+                sources.append({"name": name.decode(errors="replace") or "-",
+                                "format": SCOPE_FORMATS[fmt] if fmt < len(SCOPE_FORMATS) else "signed"})
+            self._info = {"depth": depth, "channels": channels, "clock_hz": SCOPE_CLOCK_HZ,
+                          "sources": sources, "generator_sources": SCOPE_GENERATOR_SOURCES}
+        return self._info
+
+    def _arm(self, cfg):
+        depth = self.info()["depth"]
+        length = min(max(cfg["length"], 2), depth)
+        pre = min(length * cfg["pre_percent"] // 100, length - 1)
+        trigger = cfg["channel"] | SCOPE_EDGES[cfg["edge"]] << 4
+        if cfg["trigger"]:
+            trigger |= S_TRIGGER_ENABLE
+        if cfg["unsigned"]:
+            trigger |= S_TRIGGER_UNSIGNED
+        lo = hi = 0
+        for c in range(4):
+            lo |= (cfg["sources"][c] & 0xFF) << (8 * c)
+            hi |= (cfg["sources"][c + 4] & 0xFF) << (8 * c)
+        rate = SCOPE_CLOCK_HZ / (cfg["divider"] + 1)
+        self.w(S_COMMAND, S_STOP)
+        self.w(S_DIVIDER, cfg["divider"])
+        self.w(S_TRIGGER, trigger)
+        self.w(S_LEVEL, cfg["level"] & 0xFFFF)
+        self.w(S_PATTERN, cfg["mask"] << 16 | cfg["pattern"])
+        self.w(S_PRE, pre)
+        self.w(S_LENGTH, length)
+        self.w(S_SOURCES_LO, lo)
+        self.w(S_SOURCES_HI, hi)
+        self.w(S_PHASE_STEP, int(cfg["generator_hz"] / rate * 2**32) & 0xFFFFFFFF)
+        self.w(S_MODE, 0)                    # block RAM capture, not deep
+        self.w(S_COMMAND, S_ARM)
+        self.armed = dict(cfg, length=length, pre=pre)
+
+    def stop(self):
+        self.w(S_COMMAND, S_STOP)
+        self.armed = None
+
+    def capture(self, cfg, force=False):
+        """{"done": False} while waiting for the trigger; else the capture:
+        samples as int16, channel-interleaved, little-endian, base64"""
+        if self.armed is None or any(self.armed[k] != v for k, v in cfg.items()):
+            self._arm(cfg)
+        if force:
+            self.w(S_COMMAND, S_FORCE)
+        until = time.monotonic() + SCOPE_WAIT_S
+        while True:
+            status = self.r(S_COMMAND)
+            if status & 7 == S_STATE_DONE or time.monotonic() >= until:
+                break
+            time.sleep(0.001)
+        if status & 7 != S_STATE_DONE:
+            return {"done": False, "state": status & 7}
+        armed, self.armed = self.armed, None     # the next request arms again
+        words = armed["length"] * SCOPE_CHANNELS // 2
+        # one 32-bit read per word: the LWH2F bridge does single beats only
+        data = b"".join(struct.pack("<hh", *struct.unpack(">hh", struct.pack(">I", self.b.read(SCOPE_WINDOW + i))))
+                        for i in range(words))
+        return {"done": True, "length": armed["length"], "pre": armed["pre"],
+                "forced": bool(status & S_STATUS_FORCED), "captures": status >> 16,
+                "data": base64.b64encode(data).decode()}
+
+
+class ScopeSim:
+    """The same, without hardware: the test generator's eight waveforms, the
+    probes from the simulated board (fan, switches, keys, LEDs) and a fan
+    I2C bus that talks now and then; a software trigger on the chosen
+    channel. Its source table is the fabric's (fpga/register_block.vhd)."""
+
+    PROBES = (("fan rpm", "unsigned"), ("fan tach", "unsigned"), ("switches", "digital"),
+              ("keys", "digital"), ("LEDR", "digital"), ("LEDR0 level", "unsigned"),
+              ("LEDR9 level", "unsigned"), ("fan i2c", "digital"))
+    GENERATOR = ("sine", "cosine", "triangle", "square", "sawtooth", "noise", "sine + noise", "counter")
+
+    def __init__(self, bridge):
+        self.b = bridge
+        self.captures = 0
+        self.sample = 0                      # the simulated sample clock, in samples
+        self.lfsr = 0xACE11234
+
+    def info(self):
+        sources = [{"name": n, "format": "unsigned" if n == "counter" else "signed"} for n in self.GENERATOR]
+        sources += [{"name": n, "format": f} for n, f in self.PROBES]
+        return {"depth": 4096, "channels": SCOPE_CHANNELS, "clock_hz": SCOPE_CLOCK_HZ,
+                "sources": sources, "generator_sources": SCOPE_GENERATOR_SOURCES, "sim": True}
+
+    def stop(self):
+        pass
+
+    def _signal(self, source, n, cfg, t0):
+        rate = SCOPE_CLOCK_HZ / (cfg["divider"] + 1)
+        out = []
+        for i in range(n):
+            k = t0 + i
+            phase = (k * cfg["generator_hz"] / rate) % 1.0
+            if source == 0:
+                v = 32767 * math.sin(2 * math.pi * phase)
+            elif source == 1:
+                v = 32767 * math.cos(2 * math.pi * phase)
+            elif source == 2:
+                v = 4 * 32767 * phase - 32767 if phase < 0.5 else 3 * 32767 - 4 * 32767 * phase
+            elif source == 3:
+                v = 24000 if phase < 0.5 else -24000
+            elif source == 4:
+                v = 65535 * phase - 32768
+            elif source in (5, 6):
+                self.lfsr = ((self.lfsr << 1) | (bin(self.lfsr & 0x80200003).count("1") & 1)) & 0xFFFFFFFF
+                noise = (self.lfsr & 0xFFFF) - 65536 * ((self.lfsr >> 15) & 1)
+                v = noise if source == 5 else 16383 * math.sin(2 * math.pi * phase) + noise / 16
+            elif source == 7:
+                v = k & 0xFFFF
+            else:
+                v = self._probe(source - SCOPE_GENERATOR_SOURCES, k, rate)
+            v = int(v) & 0xFFFF
+            out.append(v - 65536 if v >= 32768 else v)
+        return out
+
+    def _probe(self, p, k, rate):
+        b = self.b
+        if p == 0:
+            return int(b.fan_rpm())
+        if p == 1:
+            return b.read(REG_FAN_TACH) & 0xFF
+        if p == 2:
+            return b.read(REG_SW) & 0x3FF
+        if p == 3:
+            return b.read(REG_KEY) & 0x1F
+        levels = b.read(REG_LEVELS0)
+        if p == 4:
+            return sum(1 << i for i in range(10) if (levels >> (8 * (i % 4))) & 0xFF)
+        if p == 5:
+            return levels & 0xFF
+        if p == 6:
+            return (b.read(REG_LEVELS2) >> 8) & 0xFF
+        # the fan's I2C bus: a 100 kHz transfer every 10 ms, idle high between
+        t = k / rate
+        bit = int((t % 0.01) * 100_000)
+        if bit >= 30:
+            return 0b0011
+        scl = int((t % 0.01) * 200_000) & 1
+        sda = (0x5A6B >> (bit % 16)) & 1
+        return scl | sda << 1 | (0 if scl else 1) << 2 | (0 if sda else 1) << 3
+
+    def capture(self, cfg, force=False):
+        length = min(max(cfg["length"], 2), 4096)
+        pre = min(length * cfg["pre_percent"] // 100, length - 1)
+        rate = SCOPE_CLOCK_HZ / (cfg["divider"] + 1)
+        # SCOPE_WAIT_S of signal after the pre-trigger samples to find a trigger in
+        span = max(length, min(int(rate * SCOPE_WAIT_S), 200_000))
+        start = self.sample
+        self.sample += span + length
+        t_at = None
+        if cfg["trigger"] and not force:
+            ch = cfg["channel"]
+            probe = self._signal(cfg["sources"][ch], span + pre, cfg, start)
+            unsigned = cfg["unsigned"]
+            level = cfg["level"] & 0xFFFF if unsigned else ((cfg["level"] + 32768) & 0xFFFF) - 32768
+            for i in range(pre + 1, len(probe)):
+                a, b = probe[i - 1], probe[i]
+                if unsigned:
+                    a, b = a & 0xFFFF, b & 0xFFFF
+                if cfg["edge"] == "pattern":
+                    hit = (b & cfg["mask"]) == (cfg["pattern"] & cfg["mask"]) and (a & cfg["mask"]) != (cfg["pattern"] & cfg["mask"])
+                else:
+                    up, down = a < level <= b, a >= level > b
+                    hit = up if cfg["edge"] == "rising" else down if cfg["edge"] == "falling" else up or down
+                if hit:
+                    t_at = start + i
+                    break
+            if t_at is None:
+                time.sleep(SCOPE_WAIT_S)
+                return {"done": False, "state": 2}
+        else:
+            t_at = start + pre
+        t0 = t_at - pre
+        channels = [self._signal(cfg["sources"][c], length, cfg, t0) for c in range(SCOPE_CHANNELS)]
+        data = struct.pack(f"<{length * SCOPE_CHANNELS}h", *(channels[c][s] for s in range(length)
+                                                              for c in range(SCOPE_CHANNELS)))
+        self.captures += 1
+        return {"done": True, "length": length, "pre": pre, "forced": bool(force and cfg["trigger"]),
+                "captures": self.captures & 0xFFFF, "data": base64.b64encode(data).decode()}
+
+
 class Access:
     """Every register access, under one lock; pause/resume; the fan lease;
     loading the FPGA core."""
@@ -890,6 +1147,7 @@ class Access:
         self.pause_reason = ""
         self.leases = {}                    # reg -> monotonic deadline
         self.counts = {"read": 0, "write": 0, "lease_expired": 0, "guard_refused": 0}
+        self.scope = ScopeSim(bridge) if isinstance(bridge, SimBridge) else ScopeHw(bridge)
         self._fabric_ok = None              # the fabric guard (above): last answer
         self._fabric_checked = 0.0
         threading.Thread(target=self._watchdog, daemon=True).start()
@@ -980,6 +1238,8 @@ class Access:
                 return self.install_core(str(req["bundle"]), bool(req.get("force")))
             finally:
                 self.core_lock.release()
+        if op in ("scope_info", "scope_capture", "scope_stop"):
+            return self.scope_op(op, req)
         if op not in ("read", "read_many", "write"):
             return {"ok": False, "error": f"unknown op {op!r}"}
         with self.lock:
@@ -1003,6 +1263,30 @@ class Access:
             if "lease" in req:
                 self.leases[reg] = time.monotonic() + max(1.0, float(req["lease"]))
             return {"ok": True, "value": self.bridge.read(reg)}
+
+    # ---- the oscilloscope -------------------------------------------------
+    def scope_op(self, op, req):
+        try:
+            cfg = scope_settings(req.get("settings", {})) if op == "scope_capture" else None
+        except (TypeError, ValueError) as e:
+            return {"ok": False, "error": str(e)}
+        with self.lock:
+            if self.paused():
+                return {"ok": False, "paused": True, "error": "paused: " + self.pause_reason}
+            if not self.fabric_ready():
+                self.counts["guard_refused"] += 1
+                return {"ok": False, "paused": True,
+                        "error": "fabric not configured (LWH2F bridge in reset - no FPGA core loaded)"}
+            if not self.bridge.read(REG_FEATURES) & FEATURE_SCOPE:
+                return {"ok": False, "error": "no oscilloscope in this FPGA core"}
+            if op == "scope_info":
+                return {"ok": True, **self.scope.info()}
+            if op == "scope_stop":
+                self.scope.stop()
+                return {"ok": True}
+            out = self.scope.capture(cfg, bool(req.get("force")))
+            self.counts["read"] += out.get("length", 0) * SCOPE_CHANNELS // 2
+            return {"ok": True, **out}
 
     # ---- the FPGA core ----------------------------------------------------
     def _core_path(self, name, suffix=""):
@@ -1209,10 +1493,13 @@ class Access:
                 raise CoreError("the flash has no " + ", ".join(missing) + " (make_jic.sh RSU layout)")
             core = files[CORE_NAME]
             core_raw = ("core_size=%#x\n" % len(core)).encode().ljust(CORE_HEADER, b"\0") + core
-            for name, data in ((slot, files["app.rpd"]), ("SSBL." + slot, files["u-boot.itb"]),
-                               ("CORE." + slot, core_raw)):
+            for name, data in ((slot, files["app.rpd"]), ("SSBL." + slot, files["u-boot.itb"])):
                 if len(data) > parts[name][2]:
                     raise CoreError(f"{name} is {parts[name][2]:#x} bytes, the update needs {len(data):#x}")
+            # a core larger than its CORE slot (make_jic.sh): no QSPI copy - the
+            # slot is erased (so no older core there loads with this image) and
+            # U-Boot loads the core from the card only
+            core_in_qspi = len(core_raw) <= parts["CORE." + slot][2]
         except CoreError as e:
             self.last_rsu = {"ok": False, "refused": True, "error": str(e), "at": time.time()}
             log("RSU update refused:", e)
@@ -1237,7 +1524,11 @@ class Access:
             run(f"erase SSBL.{slot}", "--erase", ssbl)
             run(f"write SSBL.{slot}", "--add-raw", os.path.join(staging, "u-boot.itb"), "--slot", ssbl)
             run(f"erase CORE.{slot}", "--erase", corep)
-            run(f"write CORE.{slot}", "--add-raw", os.path.join(staging, "core.bin"), "--slot", corep)
+            if core_in_qspi:
+                run(f"write CORE.{slot}", "--add-raw", os.path.join(staging, "core.bin"), "--slot", corep)
+            else:
+                log(f"RSU update: the core ({len(core)} bytes) does not fit CORE.{slot} "
+                    f"({parts['CORE.' + slot][2]:#x}): left erased, the card's copy is the only one")
             boot = self._write_boot_files({f"u-boot_{slot}.itb": files["u-boot.itb"],
                                            f"de25_std_{slot}.core.rbf": core})
             steps.append("card")
