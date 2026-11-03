@@ -25,6 +25,7 @@ they are in the git history.
 
 ## Build
 
+Tools to install first: [build_requirements.md](build_requirements.md).
 Everything is built out of tree into `build/` (`BUILD_DIR=` moves it):
 
 ```

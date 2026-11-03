@@ -58,7 +58,7 @@ MAC_FILE="${DE25_MAC_FILE:-${HOME}/.de25_std_mac}"
 BOARD_MAC="$(cat "${MAC_FILE}" 2>/dev/null || true)"
 # who may log in over ssh (as root, key only): these public keys go into the
 # rootfs, so image bundles built here carry them too
-SSH_KEYS="${SSH_AUTHORIZED_KEYS:-$(ls "${HOME}"/.ssh/id_*.pub 2>/dev/null | tr '\n' ' ')}"
+SSH_KEYS="${SSH_AUTHORIZED_KEYS:-$( (ls "${HOME}"/.ssh/id_*.pub 2>/dev/null || true) | tr '\n' ' ')}"
 STAGE="${IMAGES}/sdimage"
 SLOTS="FACTORY_IMAGE P1 P2"          # the RSU images (make_jic.sh)
 
